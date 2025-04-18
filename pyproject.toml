@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "litellm-kamiwaza"
+version = "0.1.1"
+description = "LiteLLM Router integration for Kamiwaza AI"
+readme = "README.md"
+authors = [{name = "Matt Wallace", email = "matt@kamiwaza.ai"}]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "litellm>=1.0.0",
+    "kamiwaza-client>=0.1.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/m9e/litellm-kamiwaza"
+"Bug Tracker" = "https://github.com/m9e/litellm-kamiwaza/issues"
