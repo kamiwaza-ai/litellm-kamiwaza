@@ -1,2 +1,2 @@
 litellm>=1.0.0
-kamiwaza-client>=0.1.0
+kamiwaza>=0.1.0
