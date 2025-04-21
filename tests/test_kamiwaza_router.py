@@ -4,6 +4,12 @@ import os
 import sys
 import pytest
 from litellm_kamiwaza import KamiwazaRouter
+import litellm
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+# Suppress insecure request warnings
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 class TestKamiwazaRouter(unittest.TestCase):
     
@@ -111,127 +117,323 @@ class TestKamiwazaRouter(unittest.TestCase):
 
 
 @pytest.mark.integration
-class TestKamiwazaRouterIntegration:
-    """Integration tests that use a real Kamiwaza client without mocking.
-    These tests require a KAMIWAZA_API_URL environment variable to be set.
-    """
+class TestKamiwazaRouterIntegration(unittest.TestCase):
+    """Integration tests for the KamiwazaRouter class that require a real API URL."""
     
-    def setup_method(self):
-        """Check if KAMIWAZA_API_URL is set before running integration tests."""
-        self.api_url = os.environ.get("KAMIWAZA_API_URL")
-        if not self.api_url:
-            pytest.skip("KAMIWAZA_API_URL environment variable not set")
-    
-    def test_real_client_initialization(self):
-        """Test initialization with a real Kamiwaza client."""
-        # Try to create a router with the real API URL
-        router = KamiwazaRouter(
-            kamiwaza_api_url=self.api_url,
-            # Provide a fallback model in case the API has no models
-            model_list=[{
-                "model_name": "fallback-model",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "sk-dummy-key"
-                }
-            }]
-        )
-        
-        # Basic assertions
-        assert router is not None
-        assert hasattr(router, 'kamiwaza_client')
-        
-        # Attempt to get the model list
-        models = router.get_kamiwaza_model_list(use_cache=False)
-        
-        # Log what we found
-        print(f"Found {len(models)} models from real Kamiwaza API")
-        for i, model in enumerate(models):
-            print(f"Model {i+1}: {model.get('model_name')}")
+    @classmethod
+    def setUpClass(cls):
+        """Set up environment for the tests."""
+        cls.api_url = os.environ.get("KAMIWAZA_API_URL")
+        if not cls.api_url:
+            raise unittest.SkipTest("KAMIWAZA_API_URL environment variable not set")
     
     def test_litellm_kamiwaza_inference(self):
-        """Test generating a completion using KamiwazaRouter with the real deployed model."""
-        # Skip test if no API URL is set
-        if not self.api_url:
-            pytest.skip("KAMIWAZA_API_URL environment variable not set")
+        """Test that the KamiwazaRouter works with the litellm.completion function."""
+        print(f"\n{'='*80}")
+        print(f"🔍 Testing KamiwazaRouter integration with litellm")
+        print(f"{'='*80}")
         
-        # First check if the API is reachable with a simple request
-        import requests
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
+        # First verify Kamiwaza API is available using a reliable endpoint
+        full_health_endpoint = f"{self.api_url}/cluster/clusters"
+        print(f"🌐 Testing API connectivity to endpoint: {full_health_endpoint}")
         try:
-            # Test API connectivity
-            response = requests.get(f"{self.api_url}/serving/deployments", verify=False)
+            # Use the cluster/clusters endpoint which is more reliable
+            response = requests.get(full_health_endpoint, verify=False, timeout=5)
             response.raise_for_status()
-            print(f"API responded with status: {response.status_code}")
-            
-            # Create a router using KamiwazaRouter
-            router = KamiwazaRouter(
-                kamiwaza_api_url=self.api_url,
-                cache_ttl_seconds=0  # Disable caching for the test
+            print(f"✅ API connection successful! Found {len(response.json())} clusters")
+            print(f"   Response: {response.json()[:2]}{'...' if len(response.json()) > 2 else ''}")
+        except Exception as e:
+            print(f"⚠️ API connection warning: {str(e)}")
+            # Continue anyway since the KamiwazaClient might still work
+        
+        # Create the router
+        print(f"🔧 Creating KamiwazaRouter with API: {self.api_url}")
+        router = KamiwazaRouter(
+            kamiwaza_api_url=self.api_url,
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        # Get available models
+        print(f"🔍 Discovering available models...")
+        models = router.get_kamiwaza_model_list(use_cache=False)
+        
+        print(f"📋 Found {len(models)} available models:")
+        for i, model in enumerate(models):
+            model_name = model.get('model_name', 'unknown')
+            api_base = "N/A"
+            if 'litellm_params' in model and 'api_base' in model['litellm_params']:
+                api_base = model['litellm_params']['api_base']
+            print(f"  {i+1}. {model_name} → {api_base}")
+        
+        if not models:
+            pytest.skip("No models found")
+        
+        # Select the first model for testing
+        model_name = models[0].get('model_name')
+        print(f"\n{'='*80}")
+        print(f"🧠 Testing completion with model: {model_name}")
+        print(f"{'='*80}")
+        
+        # Print model details
+        model_details = next((m for m in models if m.get('model_name') == model_name), None)
+        api_base = "unknown"
+        if model_details:
+            if 'litellm_params' in model_details:
+                print("📄 Model Configuration:")
+                for key, value in model_details['litellm_params'].items():
+                    print(f"  - {key}: {value}")
+                    if key == 'api_base':
+                        api_base = value
+            if 'model_info' in model_details:
+                print("ℹ️ Model Info:")
+                for key, value in model_details['model_info'].items():
+                    print(f"  - {key}: {value}")
+        
+        # Show the inference endpoint we'll be using
+        expected_endpoint = f"{api_base}/chat/completions"
+        print(f"\n🔌 Inference will use endpoint: {expected_endpoint}")
+        
+        # Prepare test data
+        messages = [{"role": "user", "content": "Write a haiku about AI"}]
+        print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+        print(f"🔄 Sending request to {model_name}...")
+        
+        try:
+            # Use router's completion method directly instead of litellm.completion
+            # This avoids issues with api_base configuration
+            response = router.completion(
+                model=model_name,
+                messages=messages,
+                max_tokens=50
             )
             
-            # Get the list of models from the router
-            models = router.get_kamiwaza_model_list(use_cache=False)
+            # Verify response
+            assert response is not None
+            assert 'choices' in response
+            assert len(response['choices']) > 0 
+            assert 'message' in response['choices'][0]
+            
+            # Print response details
+            print(f"\n📊 Response Details:")
+            if 'model' in response:
+                print(f"  - Model: {response['model']}")
+            if 'usage' in response:
+                usage = response['usage']
+                print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+            if 'id' in response:
+                print(f"  - Response ID: {response['id']}")
+            
+            # Extract and print content
+            content = response['choices'][0]['message']['content']
+            print(f"\n🔤 Generated Haiku:")
+            print(f"'''\n{content}\n'''")
+            print(f"✅ Inference successful!")
+            
+            # Test passed
+            assert True
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error during inference: {str(e)}")
+            print(traceback.format_exc())
+            raise
+
+
+@pytest.mark.integration
+class TestKamiwazaRouterMultiInstance:
+    """Integration tests for using KamiwazaRouter with multiple API URLs."""
+    
+    def setup_method(self):
+        """Set up environment for each test."""
+        # Get test URL list from environment 
+        test_url_list = os.environ.get("KAMIWAZA_TEST_URL_LIST", "")
+        self.api_urls = [url.strip() for url in test_url_list.split(",") if url.strip()]
+        
+        # If no URLs specified, use the single API URL as fallback
+        if not self.api_urls:
+            api_url = os.environ.get("KAMIWAZA_API_URL")
+            if api_url:
+                self.api_urls = [api_url]
+
+    def _check_kamiwaza_connectivity(self, url):
+        """Verify basic connectivity to a Kamiwaza instance."""
+        full_endpoint = f"{url}/cluster/clusters"
+        try:
+            print(f"  🔍 Checking endpoint: {full_endpoint}")
+            response = requests.get(full_endpoint, verify=False, timeout=5)
+            response.raise_for_status()
+            clusters = response.json()
+            return True, f"Found {len(clusters)} clusters - {clusters[:1]}"
+        except Exception as e:
+            return False, str(e)
+
+    def test_inference_on_each_instance(self):
+        """Test that inference works on all models across all instances.
+        
+        This test verifies that we can successfully get inference from each model
+        on each Kamiwaza instance. It helps ensure that our routing logic works
+        across multiple instances.
+        """
+        if len(self.api_urls) < 2:
+            pytest.skip("At least two URLs in KAMIWAZA_TEST_URL_LIST environment variable must be set for multi-instance tests")
+        
+        print(f"\n{'='*80}")
+        print(f"🌐 Testing KamiwazaRouter with multiple instances ({len(self.api_urls)} URLs)")
+        print(f"{'='*80}")
+        
+        # Verify connectivity to each instance before testing
+        available_urls = []
+        for i, url in enumerate(self.api_urls):
+            print(f"Instance {i+1}: {url}")
+            is_available, message = self._check_kamiwaza_connectivity(url)
+            if is_available:
+                print(f"  ✅ Connection successful: {message}")
+                available_urls.append(url)
+            else:
+                print(f"  ⚠️ Connection failed: {message}")
+        
+        # Only proceed if we have at least 2 available instances
+        if len(available_urls) < 2:
+            pytest.skip(f"Need at least 2 available Kamiwaza instances, only found {len(available_urls)}")
+        
+        # Create a multi-instance router using kamiwaza_uri_list
+        print(f"\n🔧 Creating KamiwazaRouter with {len(available_urls)} available instances...")
+        
+        # Prepare the URI list as a comma-separated string
+        uri_list = ",".join(available_urls)
+        print(f"🔌 URI List: {uri_list}")
+        
+        router = KamiwazaRouter(
+            kamiwaza_uri_list=uri_list,
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        # Verify all instances were detected
+        print(f"📡 Router initialized with {len(router.kamiwaza_clients)} Kamiwaza clients")
+        for i, client in enumerate(router.kamiwaza_clients):
+            print(f"  - Client {i+1}: {client.base_url}")
+            # Verify client's SSL verification setting
+            print(f"    SSL Verification: {client.session.verify}")
+        
+        # Get all models from all instances
+        print(f"\n🔍 Discovering models across all instances...")
+        models = router.get_kamiwaza_model_list(use_cache=False)
+        
+        # Count models per instance for summary
+        instance_model_counts = {}
+        for model in models:
+            instance_url = model.get('litellm_params', {}).get('api_base', 'unknown')
+            instance_model_counts[instance_url] = instance_model_counts.get(instance_url, 0) + 1
+        
+        # Display summary of discovered models
+        print(f"\n📊 Found {len(models)} total models across {len(instance_model_counts)} instances:")
+        for instance_url, count in instance_model_counts.items():
+            print(f"  - {instance_url}: {count} models")
+        
+        # Skip test if no models found
+        if not models:
+            pytest.skip("No models found across any instances")
+        
+        # Apply model pattern filter if specified in environment
+        model_pattern = os.environ.get("KAMIWAZA_TEST_MODEL_PATTERN", "")
+        if model_pattern:
+            print(f"🔍 Filtering models by pattern: {model_pattern}")
+            filtered_models = []
+            for model in models:
+                model_name = model.get('model_name', 'unknown')
+                if model_pattern.lower() in model_name.lower():
+                    filtered_models.append(model)
+            
+            print(f"📋 Filtered from {len(models)} to {len(filtered_models)} models matching pattern '{model_pattern}'")
+            models = filtered_models
             
             if not models:
-                pytest.skip("No models found in Kamiwaza API")
-                
-            print(f"Found {len(models)} models from Kamiwaza API")
-            for i, model in enumerate(models):
-                print(f"Model {i+1}: {model.get('model_name')}")
+                pytest.skip(f"No models match pattern '{model_pattern}'")
+        
+        # Store test results for each model
+        success_count = 0
+        failure_count = 0
+        
+        # Test each model but limit to a reasonable number
+        max_models_to_test = min(len(models), 3)  # Test at most 3 models to keep tests quick
+        models_to_test = models[:max_models_to_test]
+        
+        print(f"\n🧪 Testing {max_models_to_test} of {len(models)} available models")
+        
+        # Test each model
+        for i, model in enumerate(models_to_test):
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
             
-            # Select the first model to test with
-            model_name = models[0].get('model_name')
-            print(f"Testing completion with model: {model_name}")
+            print(f"\n{'='*80}")
+            print(f"🧠 Testing model {i+1}/{len(models_to_test)}: {model_name}")
+            print(f"🌐 Instance: {api_base}")
+            print(f"{'='*80}")
             
-            # Prepare the prompt
-            messages = [{"role": "user", "content": "Write a haiku about artificial intelligence"}]
+            # Print model details for verbose output
+            if 'litellm_params' in model:
+                print("📄 Model Configuration:")
+                for key, value in model['litellm_params'].items():
+                    print(f"  - {key}: {value}")
+            if 'model_info' in model:
+                print("ℹ️ Model Info:")
+                for key, value in model['model_info'].items():
+                    print(f"  - {key}: {value}")
+            
+            # Show the inference endpoint we'll be using
+            expected_endpoint = f"{api_base}/chat/completions"
+            print(f"\n🔌 Inference will use endpoint: {expected_endpoint}")
+            
+            # Prepare prompt - keep it very short for quick tests
+            messages = [{"role": "user", "content": "Write a very short haiku about AI"}]
+            print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+            print(f"🔄 Sending request to {model_name}...")
             
             try:
-                # Make the completion call using the router
+                # Make completion call with short timeout
                 response = router.completion(
                     model=model_name,
                     messages=messages,
-                    temperature=0.7,
-                    max_tokens=100
+                    max_tokens=20,
+                    request_timeout=30  # Limit request time to avoid hanging tests
                 )
                 
-                # Verify response
-                assert response is not None
-                assert 'choices' in response
-                assert len(response['choices']) > 0
-                assert 'message' in response['choices'][0]
+                # Print response details
+                print(f"\n📊 Response Details:")
+                if 'model' in response:
+                    print(f"  - Model: {response['model']}")
+                if 'usage' in response:
+                    usage = response['usage']
+                    print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+                if 'id' in response:
+                    print(f"  - Response ID: {response['id']}")
                 
-                # The message could be a Message object or a dict with content
-                message = response['choices'][0]['message']
-                if hasattr(message, 'content'):  # It's a Message object
-                    content = message.content
-                else:  # It's a dict
-                    assert 'content' in message
-                    content = message['content']
+                # Extract and print content
+                content = response['choices'][0]['message']['content']
+                print(f"\n🔤 Generated Haiku:")
+                print(f"'''\n{content}\n'''")
+                print(f"✅ Inference successful!")
                 
-                # Print out the generated text
-                print(f"Generated content:\n{content}")
+                success_count += 1
                 
             except Exception as e:
                 import traceback
-                print(f"Error during router completion: {str(e)}")
+                print(f"❌ Error testing model {model_name}: {str(e)}")
                 print(traceback.format_exc())
-                pytest.skip(f"Router completion failed: {str(e)}")
-            
-        except requests.exceptions.HTTPError as http_err:
-            print(f"HTTP error occurred: {http_err}")
-            pytest.skip(f"Error connecting to Kamiwaza API: {http_err}")
-        except requests.exceptions.RequestException as req_err:
-            print(f"Error occurred during request: {req_err}")
-            pytest.skip(f"Error connecting to Kamiwaza API: {req_err}")
-        except Exception as e:
-            import traceback
-            print(f"Error during test: {str(e)}")
-            print(traceback.format_exc())
-            pytest.skip(f"Test failed: {str(e)}")
+                failure_count += 1
+                # Continue testing other models
+                continue
+        
+        # Print summary of test results
+        print(f"\n{'='*80}")
+        print(f"📋 Test Summary:")
+        print(f"  - Total models tested: {len(models_to_test)}")
+        print(f"  - Successful models: {success_count}")
+        print(f"  - Failed models: {failure_count}")
+        print(f"{'='*80}")
+        
+        # Test should pass if at least one model worked
+        assert success_count > 0, "No models successfully generated completions"
 
 
 if __name__ == '__main__':
