@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "litellm-kamiwaza"
-version = "0.1.1"
+version = "0.1.2"
 description = "LiteLLM Router integration for Kamiwaza AI"
 readme = "README.md"
 authors = [{name = "Matt Wallace", email = "matt@kamiwaza.ai"}]
@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "litellm>=1.0.0",
+    "litellm>=1.6.7",
     "kamiwaza>=0.3.3.0",
 ]
 
