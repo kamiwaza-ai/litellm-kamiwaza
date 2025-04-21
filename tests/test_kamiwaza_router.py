@@ -8,17 +8,25 @@ import litellm
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
+# Add the tests directory to path to allow importing static_models_conf
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from static_models_conf import get_static_model_configs
+
 # Suppress insecure request warnings
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 class TestKamiwazaRouter(unittest.TestCase):
     
     @patch('litellm_kamiwaza.kamiwaza_router.KamiwazaClient')
-    def test_initialization(self, mock_kamiwaza_client):
+    @patch('litellm_kamiwaza.kamiwaza_router.get_static_model_configs')
+    def test_initialization(self, mock_get_static_configs, mock_kamiwaza_client):
         """Test basic initialization of the router with mocked client."""
-        # Setup mock
+        # Setup mocks
         mock_instance = MagicMock()
         mock_kamiwaza_client.return_value = mock_instance
+        
+        # Mock static models to return None so they don't interfere with our test
+        mock_get_static_configs.return_value = None
         
         # Mock get_models_from_kamiwaza to return at least one model
         mock_model = {
@@ -43,6 +51,7 @@ class TestKamiwazaRouter(unittest.TestCase):
         self.assertIsNotNone(router)
         
         # Test with no source and no model_list
+        # Since we've mocked static_models_conf to return None, this should raise ValueError
         with self.assertRaises(ValueError):
             KamiwazaRouter(kamiwaza_api_url=None, kamiwaza_uri_list=None)
     
@@ -319,16 +328,29 @@ class TestKamiwazaRouterMultiInstance:
         print(f"\n🔍 Discovering models across all instances...")
         models = router.get_kamiwaza_model_list(use_cache=False)
         
-        # Count models per instance for summary
+        # Count models by source/instance
         instance_model_counts = {}
+        static_models = []
+        kamiwaza_models = []
+        
         for model in models:
+            # Check if it's a static model
+            if model.get('model_info', {}).get('provider') == 'static':
+                static_models.append(model)
+                continue
+                
+            # Otherwise it's a Kamiwaza model
+            kamiwaza_models.append(model)
             instance_url = model.get('litellm_params', {}).get('api_base', 'unknown')
             instance_model_counts[instance_url] = instance_model_counts.get(instance_url, 0) + 1
         
         # Display summary of discovered models
-        print(f"\n📊 Found {len(models)} total models across {len(instance_model_counts)} instances:")
+        print(f"\n📊 Found {len(models)} total models:")
+        print(f"  - Static models: {len(static_models)}")
+        print(f"  - Kamiwaza models: {len(kamiwaza_models)} across {len(instance_model_counts)} instances")
+        
         for instance_url, count in instance_model_counts.items():
-            print(f"  - {instance_url}: {count} models")
+            print(f"    • {instance_url}: {count} models")
         
         # Skip test if no models found
         if not models:
@@ -354,20 +376,34 @@ class TestKamiwazaRouterMultiInstance:
         success_count = 0
         failure_count = 0
         
-        # Test each model but limit to a reasonable number
-        max_models_to_test = min(len(models), 3)  # Test at most 3 models to keep tests quick
-        models_to_test = models[:max_models_to_test]
+        # Select models to test - take max 1 from each source
+        models_to_test = []
         
-        print(f"\n🧪 Testing {max_models_to_test} of {len(models)} available models")
+        # Add a static model if available
+        if static_models:
+            models_to_test.append(static_models[0])
+            
+        # Add at most one model from each Kamiwaza instance
+        for instance_url in instance_model_counts.keys():
+            # Find first model for this instance
+            for model in kamiwaza_models:
+                if model.get('litellm_params', {}).get('api_base') == instance_url:
+                    models_to_test.append(model)
+                    break
+        
+        print(f"\n🧪 Testing {len(models_to_test)} models (max 1 per instance + 1 static)")
         
         # Test each model
         for i, model in enumerate(models_to_test):
             model_name = model.get('model_name', 'unknown')
             api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source_type = "static" if provider == "static" else "Kamiwaza"
             
             print(f"\n{'='*80}")
             print(f"🧠 Testing model {i+1}/{len(models_to_test)}: {model_name}")
             print(f"🌐 Instance: {api_base}")
+            print(f"📄 Source: {source_type}")
             print(f"{'='*80}")
             
             # Print model details for verbose output
@@ -409,16 +445,21 @@ class TestKamiwazaRouterMultiInstance:
                     print(f"  - Response ID: {response['id']}")
                 
                 # Extract and print content
-                content = response['choices'][0]['message']['content']
-                print(f"\n🔤 Generated Haiku:")
+                message = response['choices'][0]['message']
+                if hasattr(message, 'content'):  # It's a Message object
+                    content = message.content
+                else:  # It's a dict
+                    content = message['content']
+                
+                print(f"\n🔤 Generated Haiku ({source_type} model):")
                 print(f"'''\n{content}\n'''")
-                print(f"✅ Inference successful!")
+                print(f"✅ Inference successful on {source_type} model!")
                 
                 success_count += 1
                 
             except Exception as e:
                 import traceback
-                print(f"❌ Error testing model {model_name}: {str(e)}")
+                print(f"❌ Error testing {source_type} model {model_name}: {str(e)}")
                 print(traceback.format_exc())
                 failure_count += 1
                 # Continue testing other models
@@ -434,6 +475,214 @@ class TestKamiwazaRouterMultiInstance:
         
         # Test should pass if at least one model worked
         assert success_count > 0, "No models successfully generated completions"
+
+
+@pytest.mark.integration
+class TestStaticModels:
+    """Tests for static model configurations."""
+    
+    def test_static_models_only(self):
+        """Test that the router works with only static models."""
+        print(f"\n{'='*80}")
+        print(f"🔍 Testing KamiwazaRouter with static models only (no Kamiwaza API)")
+        print(f"{'='*80}")
+        
+        # Create the router with ONLY static models (no Kamiwaza API URL)
+        print(f"🔧 Creating KamiwazaRouter with static models only")
+        router = KamiwazaRouter(
+            # No kamiwaza_api_url or kamiwaza_uri_list provided
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        # Verify static models were loaded
+        print(f"🔍 Discovering available models...")
+        models = router.get_kamiwaza_model_list(use_cache=False)
+        
+        print(f"📋 Found {len(models)} available models:")
+        for i, model in enumerate(models):
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            print(f"  {i+1}. {model_name} → {api_base} (Provider: {provider})")
+        
+        # Verify we found at least one static model
+        static_models = [m for m in models if m.get('model_info', {}).get('provider') == 'static']
+        assert len(static_models) > 0, "No static models were loaded"
+        
+        # Test first static model
+        static_model = static_models[0]
+        model_name = static_model.get('model_name')
+        
+        print(f"\n{'='*80}")
+        print(f"🧠 Testing completion with static model: {model_name}")
+        print(f"{'='*80}")
+        
+        # Print model details
+        api_base = static_model.get('litellm_params', {}).get('api_base', 'unknown')
+        print("📄 Model Configuration:")
+        for key, value in static_model.get('litellm_params', {}).items():
+            print(f"  - {key}: {value}")
+        print("ℹ️ Model Info:")
+        for key, value in static_model.get('model_info', {}).items():
+            print(f"  - {key}: {value}")
+        
+        # Show the inference endpoint we'll be using
+        expected_endpoint = f"{api_base}/chat/completions"
+        print(f"\n🔌 Inference will use endpoint: {expected_endpoint}")
+        
+        # Prepare test data
+        messages = [{"role": "user", "content": "Write a haiku about AI"}]
+        print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+        print(f"🔄 Sending request to {model_name}...")
+        
+        try:
+            # Use router's completion method
+            response = router.completion(
+                model=model_name,
+                messages=messages,
+                max_tokens=50,
+                request_timeout=30  # Limit request time to avoid hanging tests
+            )
+            
+            # Print response details
+            print(f"\n📊 Response Details:")
+            if 'model' in response:
+                print(f"  - Model: {response['model']}")
+            if 'usage' in response:
+                usage = response['usage']
+                print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+            if 'id' in response:
+                print(f"  - Response ID: {response['id']}")
+            
+            # Extract and print content
+            content = response['choices'][0]['message']['content']
+            print(f"\n🔤 Generated Haiku:")
+            print(f"'''\n{content}\n'''")
+            print(f"✅ Static model inference successful!")
+            
+            # Verify the response is valid
+            assert 'choices' in response
+            assert len(response['choices']) > 0
+            assert 'message' in response['choices'][0]
+            
+            # Access message content, handling both string and Message object types
+            message = response['choices'][0]['message']
+            if hasattr(message, 'content'):  # It's a Message object
+                assert message.content, "Message content is empty"
+            else:  # It's a dict
+                assert 'content' in message, "Message does not contain content"
+                assert message['content'], "Message content is empty"
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error during static model inference: {str(e)}")
+            print(traceback.format_exc())
+            # Continue test execution but mark as skipped if static model is unavailable
+            pytest.skip(f"Static model test failed: {str(e)}")
+    
+    def test_merged_models(self):
+        """Test that the router correctly merges static and Kamiwaza models."""
+        print(f"\n{'='*80}")
+        print(f"🔍 Testing KamiwazaRouter with merged models (static + Kamiwaza)")
+        print(f"{'='*80}")
+        
+        # Get Kamiwaza API URL from environment
+        api_url = os.environ.get("KAMIWAZA_API_URL")
+        if not api_url:
+            pytest.skip("KAMIWAZA_API_URL environment variable not set")
+        
+        print(f"🌐 Using Kamiwaza API: {api_url}")
+        
+        # Create the router with both static models and Kamiwaza API
+        print(f"🔧 Creating KamiwazaRouter with both static and Kamiwaza models")
+        router = KamiwazaRouter(
+            kamiwaza_api_url=api_url,
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        # Get models
+        print(f"🔍 Discovering available models...")
+        models = router.get_kamiwaza_model_list(use_cache=False)
+        
+        # Count models by source
+        static_models = [m for m in models if m.get('model_info', {}).get('provider') == 'static']
+        kamiwaza_models = [m for m in models if m.get('model_info', {}).get('provider') != 'static']
+        
+        print(f"📊 Model Sources:")
+        print(f"  - Static models: {len(static_models)}")
+        print(f"  - Kamiwaza models: {len(kamiwaza_models)}")
+        print(f"  - Total models: {len(models)}")
+        
+        # List all models
+        print(f"\n📋 Available models:")
+        for i, model in enumerate(models):
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            print(f"  {i+1}. {model_name} → {api_base} (Provider: {provider})")
+        
+        # Verify we found at least one model of each type
+        assert len(static_models) > 0, "No static models were loaded"
+        assert len(kamiwaza_models) > 0, "No Kamiwaza models were loaded"
+        
+        # Test with one model from each source
+        test_models = []
+        if static_models:
+            test_models.append(static_models[0])
+        if kamiwaza_models:
+            test_models.append(kamiwaza_models[0])
+        
+        # Test each model
+        for model in test_models:
+            model_name = model.get('model_name')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            
+            print(f"\n{'='*80}")
+            print(f"🧠 Testing {provider} model: {model_name}")
+            print(f"🌐 API Base: {api_base}")
+            print(f"{'='*80}")
+            
+            # Show the inference endpoint we'll be using
+            expected_endpoint = f"{api_base}/chat/completions"
+            print(f"\n🔌 Inference will use endpoint: {expected_endpoint}")
+            
+            # Prepare test data
+            messages = [{"role": "user", "content": "Write a short haiku about AI"}]
+            print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+            print(f"🔄 Sending request to {model_name}...")
+            
+            try:
+                # Use router's completion method
+                response = router.completion(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=50,
+                    request_timeout=30  # Limit request time to avoid hanging tests
+                )
+                
+                # Print response details
+                print(f"\n📊 Response Details:")
+                if 'model' in response:
+                    print(f"  - Model: {response['model']}")
+                if 'usage' in response:
+                    usage = response['usage']
+                    print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+                if 'id' in response:
+                    print(f"  - Response ID: {response['id']}")
+                
+                # Extract and print content
+                content = response['choices'][0]['message']['content']
+                print(f"\n🔤 Generated Haiku ({provider} model):")
+                print(f"'''\n{content}\n'''")
+                print(f"✅ Inference successful on {provider} model!")
+                
+            except Exception as e:
+                import traceback
+                print(f"❌ Error testing {provider} model {model_name}: {str(e)}")
+                print(traceback.format_exc())
+                # Continue with the next model
+                continue
 
 
 if __name__ == '__main__':

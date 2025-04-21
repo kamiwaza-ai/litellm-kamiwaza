@@ -1,0 +1,1 @@
+tests/static_models_conf.py
