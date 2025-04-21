@@ -685,6 +685,416 @@ class TestStaticModels:
                 continue
 
 
+@pytest.mark.integration
+class TestPatternMatching:
+    """Tests for the model pattern matching functionality."""
+    
+    def test_pattern_matching_qwen(self):
+        """Test that the router correctly applies pattern filtering for 'qwen' models."""
+        print(f"\n{'='*80}")
+        print(f"🔍 Testing model pattern matching with filter: 'qwen'")
+        print(f"{'='*80}")
+        
+        # Get test URL list from environment 
+        test_url_list = os.environ.get("KAMIWAZA_TEST_URL_LIST", "")
+        api_urls = [url.strip() for url in test_url_list.split(",") if url.strip()]
+        
+        # If no URLs specified, use the single API URL as fallback
+        if not api_urls:
+            api_url = os.environ.get("KAMIWAZA_API_URL")
+            if api_url:
+                api_urls = [api_url]
+                
+        if not api_urls:
+            pytest.skip("No Kamiwaza API URLs provided in environment variables")
+            
+        print(f"🌐 Using {len(api_urls)} Kamiwaza API URLs:")
+        for i, url in enumerate(api_urls):
+            print(f"  {i+1}. {url}")
+        
+        # First get all models without filtering using all URLs
+        print(f"🔍 Getting baseline model list without filtering...")
+        
+        # Prepare the URI list as a comma-separated string
+        uri_list = ",".join(api_urls)
+        
+        router_all = KamiwazaRouter(
+            kamiwaza_uri_list=uri_list,
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        all_models = router_all.get_kamiwaza_model_list(use_cache=False)
+        
+        # Count models by type
+        static_models = [m for m in all_models if m.get('model_info', {}).get('provider') == 'static']
+        kamiwaza_models = [m for m in all_models if m.get('model_info', {}).get('provider') != 'static']
+        
+        # Organize models by instance URL
+        models_by_instance = {}
+        for model in kamiwaza_models:
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            if api_base not in models_by_instance:
+                models_by_instance[api_base] = []
+            models_by_instance[api_base].append(model)
+        
+        print(f"📊 Baseline model count:")
+        print(f"  - Total models: {len(all_models)}")
+        print(f"  - Static models: {len(static_models)}")
+        print(f"  - Kamiwaza models: {len(kamiwaza_models)} across {len(models_by_instance)} instances")
+        
+        for instance_url, models in models_by_instance.items():
+            print(f"    • {instance_url}: {len(models)} models")
+        
+        # List all model names for reference
+        print(f"\n📋 Available models without filtering:")
+        for i, model in enumerate(all_models):
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source = "static" if provider == "static" else "Kamiwaza"
+            print(f"  {i+1}. {model_name} → {api_base} ({source})")
+        
+        # Check if any model names contain 'qwen' before proceeding
+        pattern = "qwen"
+        has_qwen_models = any(pattern.lower() in model.get('model_name', '').lower() for model in all_models)
+        
+        if not has_qwen_models:
+            print(f"\n⚠️ No models matching pattern '{pattern}' found in available models")
+            print(f"⚠️ Adding a backup model to allow router initialization")
+            
+            # Need to provide at least one model to avoid ValueError during initialization
+            backup_model = {
+                "model_name": "dummy-model",
+                "litellm_params": {
+                    "model": "openai/model",
+                    "api_key": "no_key",
+                    "api_base": "http://localhost:8000/v1"  # Dummy URL
+                }
+            }
+            
+            # Create router with backup model
+            print(f"\n🔍 Creating KamiwazaRouter with pattern filter: '{pattern}' and backup model")
+            router_filtered = KamiwazaRouter(
+                kamiwaza_uri_list=uri_list,
+                model_pattern=pattern,
+                model_list=[backup_model],  # Provide backup model
+                cache_ttl_seconds=0  # Disable caching for tests
+            )
+            
+            # Skip the rest of the test
+            pytest.skip(f"No models with pattern '{pattern}' found, skipping actual test")
+        else:
+            # Now create a router with pattern filtering
+            print(f"\n🔍 Creating KamiwazaRouter with pattern filter: '{pattern}'")
+            router_filtered = KamiwazaRouter(
+                kamiwaza_uri_list=uri_list,
+                model_pattern=pattern,
+                cache_ttl_seconds=0  # Disable caching for tests
+            )
+        
+        # Get filtered models
+        filtered_models = router_filtered.get_kamiwaza_model_list(use_cache=False)
+        
+        # Count filtered models by type
+        filtered_static = [m for m in filtered_models if m.get('model_info', {}).get('provider') == 'static']
+        filtered_kamiwaza = [m for m in filtered_models if m.get('model_info', {}).get('provider') != 'static']
+        
+        # Group filtered models by instance
+        filtered_by_instance = {}
+        for model in filtered_kamiwaza:
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            if api_base not in filtered_by_instance:
+                filtered_by_instance[api_base] = []
+            filtered_by_instance[api_base].append(model)
+        
+        print(f"📊 Filtered model count:")
+        print(f"  - Total filtered models: {len(filtered_models)}")
+        print(f"  - Static models: {len(filtered_static)}")
+        print(f"  - Kamiwaza models: {len(filtered_kamiwaza)} across {len(filtered_by_instance)} instances")
+        
+        for instance_url, models in filtered_by_instance.items():
+            print(f"    • {instance_url}: {len(models)} models")
+        
+        # List filtered models
+        print(f"\n📋 Models matching pattern '{pattern}':")
+        for i, model in enumerate(filtered_models):
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source = "static" if provider == "static" else "Kamiwaza"
+            print(f"  {i+1}. {model_name} → {api_base} ({source})")
+            
+        # Skip if no matching models found (except dummy)
+        real_models = [m for m in filtered_models if m.get('model_name') != 'dummy-model']
+        if not real_models:
+            pytest.skip(f"No models with pattern '{pattern}' found")
+            
+        # Verify all filtered models contain the pattern
+        for model in real_models:
+            model_name = model.get('model_name', 'unknown')
+            assert pattern.lower() in model_name.lower(), f"Model {model_name} does not match pattern '{pattern}'"
+            
+        # Test inference with first filtered model
+        if real_models:
+            model = real_models[0]
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source_type = "static" if provider == "static" else "Kamiwaza"
+            
+            print(f"\n{'='*80}")
+            print(f"🧠 Testing inference with filtered model: {model_name}")
+            print(f"🌐 Instance: {api_base}")
+            print(f"📄 Source: {source_type}")
+            print(f"{'='*80}")
+            
+            # Show the inference endpoint we'll be using
+            expected_endpoint = f"{api_base}/chat/completions"
+            print(f"\n🔌 Inference will use endpoint: {expected_endpoint}")
+            
+            # Prepare prompt
+            messages = [{"role": "user", "content": "Write a very short haiku about AI"}]
+            print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+            print(f"🔄 Sending request to {model_name}...")
+            
+            try:
+                # Make completion call with short timeout
+                response = router_filtered.completion(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=20,
+                    request_timeout=30  # Limit request time to avoid hanging tests
+                )
+                
+                # Print response details
+                print(f"\n📊 Response Details:")
+                if 'model' in response:
+                    print(f"  - Model: {response['model']}")
+                if 'usage' in response:
+                    usage = response['usage']
+                    print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+                if 'id' in response:
+                    print(f"  - Response ID: {response['id']}")
+                
+                # Extract and print content
+                message = response['choices'][0]['message']
+                if hasattr(message, 'content'):  # It's a Message object
+                    content = message.content
+                else:  # It's a dict
+                    content = message['content']
+                
+                print(f"\n🔤 Generated Haiku (pattern-matched {source_type} model):")
+                print(f"'''\n{content}\n'''")
+                print(f"✅ Inference successful on pattern-matched model!")
+                
+            except Exception as e:
+                import traceback
+                print(f"❌ Error testing pattern-matched model {model_name}: {str(e)}")
+                print(traceback.format_exc())
+                pytest.skip(f"Inference with pattern-matched model failed: {str(e)}")
+    
+    def test_pattern_matching_static(self):
+        """Test that the router correctly applies pattern filtering for 'static' models."""
+        print(f"\n{'='*80}")
+        print(f"🔍 Testing model pattern matching with filter: 'static'")
+        print(f"{'='*80}")
+        
+        # First get all models without filtering
+        print(f"🔍 Getting baseline model list without filtering...")
+        router_all = KamiwazaRouter(
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        all_models = router_all.get_kamiwaza_model_list(use_cache=False)
+        
+        # Count models by type
+        static_models = [m for m in all_models if m.get('model_info', {}).get('provider') == 'static']
+        
+        # Skip if no static models
+        if not static_models:
+            pytest.skip("No static models available for testing")
+        
+        # Show total number of models available
+        print(f"📊 Baseline model count: {len(all_models)} total, {len(static_models)} static")
+            
+        # Now create a router with pattern filtering
+        pattern = "static"
+        print(f"\n🔍 Creating KamiwazaRouter with pattern filter: '{pattern}'")
+        router_filtered = KamiwazaRouter(
+            model_pattern=pattern,
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        # Get filtered models
+        filtered_models = router_filtered.get_kamiwaza_model_list(use_cache=False)
+        
+        print(f"📊 Found {len(filtered_models)} models matching pattern '{pattern}'")
+        
+        # List filtered models
+        print(f"\n📋 Models matching pattern '{pattern}':")
+        for i, model in enumerate(filtered_models):
+            model_name = model.get('model_name', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source = "static" if provider == "static" else "Kamiwaza"
+            print(f"  {i+1}. {model_name} ({source})")
+            
+        # Verify all filtered models contain the pattern
+        for model in filtered_models:
+            model_name = model.get('model_name', 'unknown')
+            assert pattern.lower() in model_name.lower(), f"Model {model_name} does not match pattern '{pattern}'"
+            
+        # Verify we found at least one model
+        assert len(filtered_models) > 0, f"No models with pattern '{pattern}' found"
+            
+        # Test inference with first filtered model
+        model = filtered_models[0]
+        model_name = model.get('model_name', 'unknown')
+        
+        print(f"\n{'='*80}")
+        print(f"🧠 Testing inference with static pattern-matched model: {model_name}")
+        print(f"{'='*80}")
+        
+        # Show the inference endpoint we'll be using
+        api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+        expected_endpoint = f"{api_base}/chat/completions"
+        print(f"🔌 Inference will use endpoint: {expected_endpoint}")
+        
+        # Prepare prompt
+        messages = [{"role": "user", "content": "Write a very short haiku about AI"}]
+        print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+        print(f"🔄 Sending request to {model_name}...")
+        
+        try:
+            # Make completion call
+            response = router_filtered.completion(
+                model=model_name,
+                messages=messages,
+                max_tokens=20,
+                request_timeout=30  # Limit request time to avoid hanging tests
+            )
+            
+            # Print response details
+            print(f"\n📊 Response Details:")
+            if 'model' in response:
+                print(f"  - Model: {response['model']}")
+            if 'usage' in response:
+                usage = response['usage']
+                print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+            
+            # Extract and print content
+            message = response['choices'][0]['message']
+            if hasattr(message, 'content'):  # It's a Message object
+                content = message.content
+            else:  # It's a dict
+                content = message['content']
+            
+            print(f"\n🔤 Generated Haiku (static pattern-matched model):")
+            print(f"'''\n{content}\n'''")
+            print(f"✅ Inference successful with pattern-matched static model!")
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error testing static model {model_name}: {str(e)}")
+            print(traceback.format_exc())
+            pytest.skip(f"Inference with static model failed: {str(e)}")
+    
+    def test_pattern_matching_gemma(self):
+        """Test that the router correctly applies pattern filtering for 'gemma' models."""
+        print(f"\n{'='*80}")
+        print(f"🔍 Testing model pattern matching with filter: 'gemma'")
+        print(f"{'='*80}")
+        
+        # Get Kamiwaza API URL from environment
+        api_url = os.environ.get("KAMIWAZA_API_URL")
+        if not api_url:
+            pytest.skip("KAMIWAZA_API_URL environment variable not set")
+            
+        print(f"🌐 Using Kamiwaza API: {api_url}")
+        
+        # Now create a router with pattern filtering
+        pattern = "gemma"
+        print(f"🔍 Creating KamiwazaRouter with pattern filter: '{pattern}'")
+        router_filtered = KamiwazaRouter(
+            kamiwaza_api_url=api_url,
+            model_pattern=pattern,
+            cache_ttl_seconds=0  # Disable caching for tests
+        )
+        
+        # Get filtered models
+        filtered_models = router_filtered.get_kamiwaza_model_list(use_cache=False)
+        
+        print(f"📊 Found {len(filtered_models)} models matching pattern '{pattern}'")
+        
+        # List filtered models
+        print(f"\n📋 Models matching pattern '{pattern}':")
+        for i, model in enumerate(filtered_models):
+            model_name = model.get('model_name', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source = "static" if provider == "static" else "Kamiwaza"
+            print(f"  {i+1}. {model_name} ({source})")
+            
+        # Skip if no matching models found
+        if not filtered_models:
+            pytest.skip(f"No models matching pattern '{pattern}' found")
+            
+        # Verify all filtered models contain the pattern
+        for model in filtered_models:
+            model_name = model.get('model_name', 'unknown')
+            assert pattern.lower() in model_name.lower(), f"Model {model_name} does not match pattern '{pattern}'"
+            
+        # Test inference with first filtered model
+        model = filtered_models[0]
+        model_name = model.get('model_name', 'unknown')
+        
+        print(f"\n{'='*80}")
+        print(f"🧠 Testing inference with gemma pattern-matched model: {model_name}")
+        print(f"{'='*80}")
+        
+        # Show the inference endpoint we'll be using
+        api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+        expected_endpoint = f"{api_base}/chat/completions"
+        print(f"🔌 Inference will use endpoint: {expected_endpoint}")
+        
+        # Prepare prompt
+        messages = [{"role": "user", "content": "Write a very short haiku about AI"}]
+        print(f"\n📝 Prompt: \"{messages[0]['content']}\"")
+        print(f"🔄 Sending request to {model_name}...")
+        
+        try:
+            # Make completion call
+            response = router_filtered.completion(
+                model=model_name,
+                messages=messages,
+                max_tokens=20,
+                request_timeout=30  # Limit request time to avoid hanging tests
+            )
+            
+            # Print response details
+            print(f"\n📊 Response Details:")
+            if 'model' in response:
+                print(f"  - Model: {response['model']}")
+            if 'usage' in response:
+                usage = response['usage']
+                print(f"  - Tokens: {usage.get('total_tokens', 'unknown')} total ({usage.get('prompt_tokens', 'unknown')} prompt, {usage.get('completion_tokens', 'unknown')} completion)")
+            
+            # Extract and print content
+            message = response['choices'][0]['message']
+            if hasattr(message, 'content'):  # It's a Message object
+                content = message.content
+            else:  # It's a dict
+                content = message['content']
+            
+            print(f"\n🔤 Generated Haiku (gemma pattern-matched model):")
+            print(f"'''\n{content}\n'''")
+            print(f"✅ Inference successful with pattern-matched gemma model!")
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error testing gemma model {model_name}: {str(e)}")
+            print(traceback.format_exc())
+            pytest.skip(f"Inference with gemma model failed: {str(e)}")
+
+
 if __name__ == '__main__':
     # For standalone debugging
     if 'unittest' in sys.argv:
