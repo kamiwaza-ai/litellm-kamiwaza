@@ -16,7 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "litellm>=1.0.0",
-    "kamiwaza-client>=0.1.0",
+    "kamiwaza>=0.3.3.0",
 ]
 
 [project.urls]

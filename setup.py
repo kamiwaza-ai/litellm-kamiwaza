@@ -5,6 +5,6 @@ setup(
     packages=find_packages(),
     install_requires=[
         "litellm>=1.0.0",
-        "kamiwaza>=0.1.0", # provides kamiwaza_client
+        "kamiwaza>=0.3.3.0", # This package provides the kamiwaza_client module
     ],
 )
