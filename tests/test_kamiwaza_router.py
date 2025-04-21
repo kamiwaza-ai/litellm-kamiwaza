@@ -155,6 +155,12 @@ class TestKamiwazaRouterIntegration:
         if not self.api_url:
             pytest.skip("KAMIWAZA_API_URL environment variable not set")
         
+        # Enable more verbose logging
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+        
+        print(f"Using Kamiwaza API URL: {self.api_url}")
+        
         # First check if the API is reachable with a simple request
         import requests
         import urllib3
@@ -162,28 +168,82 @@ class TestKamiwazaRouterIntegration:
 
         try:
             # Test API connectivity
-            response = requests.get(f"{self.api_url}/api/serving/deployments", verify=False)
+            api_url = f"{self.api_url}/api/serving/deployments"
+            print(f"Testing API connectivity to: {api_url}")
+            response = requests.get(api_url, verify=False)
             response.raise_for_status()
             print(f"API responded with status: {response.status_code}")
             
+            # Print raw response for debugging
+            deployments = response.json()
+            print(f"Raw API response (first 500 chars): {str(deployments)[:500]}")
+            
             # Create a router using the normal KamiwazaRouter initialization
             # This will use KamiwazaClient to discover models
+            print(f"Creating KamiwazaRouter with API URL: {self.api_url}")
+            
+            # First create a kamiwaza client manually to test it works
+            from kamiwaza_client import KamiwazaClient
+            client = KamiwazaClient(self.api_url)
+            client.session.verify = False  # Disable SSL verification 
+            print(f"Created KamiwazaClient with base_url: {client.base_url}")
+            
+            # Test the client directly
+            try:
+                print("Testing KamiwazaClient.serving.list_deployments() directly...")
+                # Debug the URL KamiwazaClient is using
+                if hasattr(client.serving, '_base_url'):
+                    print(f"KamiwazaClient.serving base_url: {client.serving._base_url}")
+                elif hasattr(client.serving, 'base_url'):
+                    print(f"KamiwazaClient.serving base_url: {client.serving.base_url}")
+                else:
+                    print("KamiwazaClient.serving doesn't have a visible base_url attribute")
+                
+                # Try to construct the URL manually as KamiwazaClient would
+                expected_url = f"{client.base_url}/serving/deployments"
+                print(f"Expected URL used internally: {expected_url}")
+                
+                # Try direct request to compare
+                direct_response = requests.get(expected_url, verify=False)
+                print(f"Direct request to {expected_url} status: {direct_response.status_code}")
+                
+                # Now test the client call
+                client_deployments = client.serving.list_deployments()
+                print(f"Client returned {len(client_deployments)} deployments")
+            except Exception as client_e:
+                print(f"Error using KamiwazaClient directly: {client_e}")
+            
+            # Now create the router
+            api_url_with_path = f"{self.api_url}/api" if not self.api_url.endswith('/api') else self.api_url
+            print(f"Creating KamiwazaRouter with API URL including /api path: {api_url_with_path}")
             router = KamiwazaRouter(
-                kamiwaza_api_url=self.api_url,
+                kamiwaza_api_url=api_url_with_path,
                 cache_ttl_seconds=0  # Disable caching for the test
             )
             
+            print("KamiwazaRouter created successfully")
+            
             # Get the list of models from the router
+            print("Calling router.get_kamiwaza_model_list(use_cache=False)...")
             models = router.get_kamiwaza_model_list(use_cache=False)
             
             if not models:
-                pytest.skip("No models found in Kamiwaza API")
+                print("No models found in Kamiwaza API, checking if any manual model_list was provided...")
+                if hasattr(router, 'model_list') and router.model_list:
+                    print(f"Router has {len(router.model_list)} models from initialization")
+                    models = router.model_list
+                else:
+                    print("No models available at all.")
+                    pytest.skip("No models found in Kamiwaza API")
                 
             print(f"Found {len(models)} models from Kamiwaza API")
             for i, model in enumerate(models):
-                print(f"Model {i+1}: {model.get('model_name')}")
+                print(f"Model {i+1}: {model.get('model_name')} with params: {model.get('litellm_params')}")
             
             # Select the first model to test with
+            if not models:
+                pytest.skip("No models found to test with")
+                
             model_name = models[0].get('model_name')
             print(f"Testing completion with model: {model_name}")
             
@@ -192,6 +252,7 @@ class TestKamiwazaRouterIntegration:
             
             try:
                 # Make the completion call using the router
+                print(f"Calling router.completion with model={model_name}...")
                 response = router.completion(
                     model=model_name,
                     messages=messages,
@@ -204,16 +265,27 @@ class TestKamiwazaRouterIntegration:
                 assert 'choices' in response
                 assert len(response['choices']) > 0
                 assert 'message' in response['choices'][0]
-                assert 'content' in response['choices'][0]['message']
+                
+                # The message could be a Message object or a dict with content
+                message = response['choices'][0]['message']
+                if hasattr(message, 'content'):  # It's a Message object
+                    content = message.content
+                else:  # It's a dict
+                    assert 'content' in message
+                    content = message['content']
                 
                 # Print out the generated text
-                content = response['choices'][0]['message']['content']
                 print(f"Generated content:\n{content}")
                 
             except Exception as e:
                 import traceback
                 print(f"Error during router completion: {str(e)}")
                 print(traceback.format_exc())
+                
+                # Instead of skipping, let's print the models again for inspection
+                if hasattr(router, 'model_list'):
+                    print(f"Router has {len(router.model_list)} models: {[m.get('model_name') for m in router.model_list]}")
+                
                 pytest.skip(f"Router completion failed: {str(e)}")
             
         except requests.exceptions.HTTPError as http_err:
