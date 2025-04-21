@@ -6,6 +6,10 @@ from kamiwaza_client import KamiwazaClient
 import os
 import time
 from typing import List, Dict, Any, Optional
+import urllib3
+
+# Disable insecure request warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Assuming static_models_conf.py is in the parent directory (project root)
 # Adjust the import path if necessary based on your project structure
@@ -166,15 +170,20 @@ class KamiwazaRouter(Router):
 
             models_list = []
             for d in up_deployments:
-                # Safely get deployment name
+                # Safely get deployment name and model name
                 deployment_name = getattr(d, 'name', 'model')
+                model_name = getattr(d, 'm_name', deployment_name)
+                
+                # Use a reasonable default if m_name is empty or "Unknown"
+                if not model_name or model_name == "Unknown":
+                    model_name = f"model-{getattr(d, 'id', 'unknown')}"
 
                 # Get the first DEPLOYED instance
                 deployed_instances = [i for i in getattr(d, 'instances', []) if hasattr(i, 'status') and i.status == 'DEPLOYED']
                 instance = deployed_instances[0] if deployed_instances else None
 
-                # Determine the host to use
-                host = None
+                # Determine the host to use - default to localhost for empty host_name
+                host = "localhost"  # Default to localhost
                 if instance and hasattr(instance, 'host_name') and instance.host_name:
                     host = instance.host_name
                 else:
@@ -185,46 +194,35 @@ class KamiwazaRouter(Router):
                             host_part = base_url.split('://')[1].split('/')[0]
                         else:
                             host_part = base_url.split('/')[0]
-                        host = host_part.split(':')[0] if ':' in host_part else host_part
-                        # Use m_name for logging context if available
-                        log_name = getattr(d, 'm_name', getattr(d, 'name', 'model'))
-                        logger.debug(f"Using host '{host}' derived from base_url for deployment '{log_name}'")
+                        temp_host = host_part.split(':')[0] if ':' in host_part else host_part
+                        if temp_host and temp_host != "":
+                            host = temp_host
+                        # Log that we're using a derived host
+                        logger.debug(f"Using host '{host}' derived from base_url for deployment '{model_name}'")
                     except IndexError:
-                         # Use m_name for logging context if available
-                         log_name = getattr(d, 'm_name', getattr(d, 'name', 'model'))
-                         logger.warning(f"Could not parse host from base_url: {base_url} for deployment '{log_name}'. Skipping.")
-                         continue # Skip this deployment if host cannot be determined
+                         logger.warning(f"Could not parse host from base_url: {base_url} for deployment '{model_name}'. Using default host: {host}")
 
                 lb_port = getattr(d, 'lb_port', None)
-                # Use the actual model name (m_name) for the outer key
-                outer_model_name = getattr(d, 'm_name', None)
-
-                if host and lb_port and outer_model_name:
-                    # Use deployment name (d.name) for the inner 'model' parameter targeting the specific endpoint
-                    
-                    #inner_model_param = f"openai/{getattr(d, 'name', outer_model_name)}" # Fallback to outer name if d.name missing
-                    inner_model_param = "openai/model"
-
-                    model_config = {
-                        "model_name": outer_model_name, # Use actual model name (m_name) as the identifier
-                        "litellm_params": {
-                            "model": inner_model_param, # Target the specific deployment endpoint via d.name
-                            "api_key": "no_key", # API key is often handled by the proxy/gateway
-                            "api_base": f"http://{host}:{lb_port}/v1" # Assuming HTTP endpoint for the load balancer
-                        }
-                        # Add other params like rpm, tpm if available from deployment object `d`
-                        # "rpm": getattr(d, 'rpm_limit', None),
-                        # "tpm": getattr(d, 'tpm_limit', None),
+                
+                if not lb_port:
+                    logger.warning(f"Model {model_name} missing lb_port, skipping")
+                    continue
+                
+                model_config = {
+                    "model_name": model_name, # Use actual model name (m_name) as the identifier
+                    "litellm_params": {
+                        "model": "openai/model", # Target the specific deployment endpoint via d.name
+                        "api_key": "no_key", # API key is often handled by the proxy/gateway
+                        "api_base": f"http://{host}:{lb_port}/v1" # Assuming HTTP endpoint for the load balancer
+                    },
+                    "model_info": {
+                        "id": model_name,
+                        "deployment_id": getattr(d, 'id', None),
+                        "status": getattr(d, 'status', None)
                     }
-                    models_list.append(model_config)
-                    logger.debug(f"Successfully processed deployment '{getattr(d, 'name', outer_model_name)}' (model: {outer_model_name}) from {kamiwaza_client.base_url}")
-                else:
-                    log_name = getattr(d, 'm_name', getattr(d, 'name', 'model'))
-                    missing_parts = []
-                    if not host: missing_parts.append(f"host ('{host}')")
-                    if not lb_port: missing_parts.append(f"lb_port ('{lb_port}')")
-                    if not outer_model_name: missing_parts.append(f"m_name ('{outer_model_name}')")
-                    logger.warning(f"Skipping deployment '{log_name}' from {kamiwaza_client.base_url} due to missing: {', '.join(missing_parts)}.")
+                }
+                models_list.append(model_config)
+                logger.debug(f"Successfully processed deployment '{deployment_name}' (model: {model_name}) from {kamiwaza_client.base_url}")
 
             logger.info(f"Successfully fetched and processed {len(models_list)} models from {kamiwaza_client.base_url}")
             return models_list
@@ -284,21 +282,42 @@ class KamiwazaRouter(Router):
             return self._cached_model_list
 
         logger.info(f"Cache expired or not used. Fetching fresh model list (TTL: {self.cache_ttl_seconds}s).")
-        all_models: List[Dict[str, Any]] = []
+        new_models: List[Dict[str, Any]] = []
+        had_error = False
 
         # Fetch from Kamiwaza instances if configured
         if self.has_kamiwaza_source:
-            if self.kamiwaza_client:
-                kamiwaza_models = self.get_models_from_kamiwaza(self.kamiwaza_client)
-                all_models.extend(kamiwaza_models)
-            elif self.kamiwaza_clients:
-                for client in self.kamiwaza_clients:
-                    client_models = self.get_models_from_kamiwaza(client)
-                    all_models.extend(client_models)
+            try:
+                if self.kamiwaza_client:
+                    kamiwaza_models = self.get_models_from_kamiwaza(self.kamiwaza_client)
+                    new_models.extend(kamiwaza_models)
+                elif self.kamiwaza_clients:
+                    for client in self.kamiwaza_clients:
+                        client_models = self.get_models_from_kamiwaza(client)
+                        new_models.extend(client_models)
+            except Exception as e:
+                logger.error(f"Error fetching models from Kamiwaza: {e}")
+                had_error = True
 
         # Fetch static models
-        static_models = self._get_static_models()
-        all_models.extend(static_models)
+        try:
+            static_models = self._get_static_models()
+            new_models.extend(static_models)
+        except Exception as e:
+            logger.error(f"Error loading static models: {e}")
+            had_error = True
+
+        # If we had errors fetching models and have a cached list, keep using it
+        if had_error and self._cached_model_list is not None:
+            logger.warning("Errors occurred fetching new models. Using cached models.")
+            return self._cached_model_list
+
+        # If we had errors and no cache, but a model_list was provided during initialization, 
+        # use Router's internal model_list
+        if had_error and len(new_models) == 0 and hasattr(self, 'model_list') and self.model_list:
+            logger.warning("Errors occurred fetching models. Using models provided at initialization.")
+            # Get reference to the internal model_list from the Router parent class
+            return self.model_list
 
         # Filter out duplicate model_name entries, prioritizing non-static models (Kamiwaza)
         # If a static model has the same name as a Kamiwaza model, the Kamiwaza one is kept.
@@ -307,7 +326,7 @@ class KamiwazaRouter(Router):
         # Prioritize Kamiwaza models by adding them first if they exist
         kamiwaza_source_count = 0
         if self.has_kamiwaza_source:
-            kamiwaza_models_from_fetch = [m for m in all_models if m not in static_models] # Simple way to separate, might need refinement
+            kamiwaza_models_from_fetch = [m for m in new_models if m not in static_models] # Simple way to separate, might need refinement
             for model in kamiwaza_models_from_fetch:
                 model_name = model.get("model_name")
                 if model_name and model_name not in seen_model_names:
@@ -435,3 +454,29 @@ class KamiwazaRouter(Router):
         self._cached_model_list = None
         self._cache_timestamp = 0.0
         logger.info("Model list set externally via set_model_list, cache cleared.")
+        
+    # Override completion method to ensure the model list is preserved
+    def completion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+        """
+        Override of Router.completion to ensure model list is preserved.
+        
+        Args:
+            model: The model name to use for completion
+            messages: The messages to generate a completion for
+            **kwargs: All other parameters to pass to the model
+            
+        Returns:
+            The completion response
+        """
+        # Ensure the model exists in the model list
+        model_exists = False
+        for m in self.model_list:
+            if m.get("model_name") == model:
+                model_exists = True
+                break
+                
+        if not model_exists:
+            raise ValueError(f"Model '{model}' not found in model list. Available models: {[m.get('model_name') for m in self.model_list]}")
+                
+        # Call parent completion method with current model list
+        return super().completion(model=model, messages=messages, **kwargs)
