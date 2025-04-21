@@ -10,6 +10,8 @@ This example demonstrates:
 
 import os
 import logging
+import pathlib
+from dotenv import load_dotenv
 from litellm_kamiwaza import KamiwazaRouter
 
 # Configure logging
@@ -19,94 +21,109 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
-    # Define static models (can be used alongside Kamiwaza models)
-    static_models = [
-        {
-            "model_name": "openai-model",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": "${OPENAI_API_KEY:-dummy_key}"  # Uses env var with fallback
-            },
-            "model_info": {
-                "id": "openai-model-id"
-            }
-        }
-    ]
+    # Load environment variables from .env file
+    env_path = pathlib.Path(__file__).parent / '.env'
+    load_dotenv(dotenv_path=env_path)
     
-    # Initialize router with advanced options
-    logger.info("Initializing KamiwazaRouter with advanced options...")
+    # Get Kamiwaza URL list from environment
+    test_url_list = os.environ.get("KAMIWAZA_TEST_URL_LIST", "")
+    api_urls = [url.strip() for url in test_url_list.split(",") if url.strip()]
     
-    try:
-        router = KamiwazaRouter(
-            model_list=static_models,
-            # Filter to only use models with "72b" in their name
-            model_pattern="72b",
-            # Cache model list for 5 minutes
-            cache_ttl_seconds=300,
-            # Use fallbacks when models fail
-            fallbacks=[
-                # If any 72b model fails, try openai-model
-                {"*": ["openai-model"]}
-            ],
-            # Default parameters for all requests
-            default_litellm_params={
-                "timeout": 30,
-                "max_retries": 3,
-                "metadata": {"source": "litellm-kamiwaza-example"}
-            }
-        )
+    # If no URLs specified, use the single API URL as fallback
+    if not api_urls:
+        api_url = os.environ.get("KAMIWAZA_API_URL", "https://localhost/api")
+        api_urls = [api_url]
+    
+    # Create a comma-separated string of URLs
+    uri_list = ",".join(api_urls)
+    
+    # Initialize the router with multiple instances
+    logger.info(f"Initializing KamiwazaRouter with {len(api_urls)} Kamiwaza instances")
+    for i, url in enumerate(api_urls):
+        logger.info(f"  Instance {i+1}: {url}")
+    
+    router = KamiwazaRouter(
+        kamiwaza_uri_list=uri_list,
+        cache_ttl_seconds=0  # Disable caching for this example
+    )
+    
+    # Get all available models
+    model_list = router.get_model_list()
+    logger.info(f"Found {len(model_list)} total available models")
+    
+    # Group models by instance
+    models_by_instance = {}
+    static_models = []
+    
+    for model in model_list:
+        model_name = model.get('model_name', 'unknown')
+        provider = model.get('model_info', {}).get('provider', 'unknown')
         
-        # Get available models
-        logger.info("Fetching filtered model list...")
-        models = router.get_model_list()
-        
-        if not models:
-            logger.warning("No models available after filtering")
-            return
-        
-        # Display available models
-        logger.info(f"Found {len(models)} available models after filtering:")
-        for i, model in enumerate(models):
-            logger.info(f"  {i+1}. {model['model_name']}")
-        
-        # Use model pattern
-        model_72b = None
-        for model in models:
-            if "72b" in model["model_name"].lower():
-                model_72b = model["model_name"]
-                break
-        
-        if model_72b:
-            logger.info(f"Found 72b model: {model_72b}")
-            
-            # Make a completion request with the 72b model
-            logger.info("Making completion request with 72b model...")
-            response = router.completion(
-                model=model_72b,
-                messages=[{"role": "user", "content": "Explain the concept of recursive functions in 2 sentences"}]
-            )
-            logger.info(f"72b model response: {response.choices[0].message.content}")
+        if provider == 'static':
+            static_models.append(model)
         else:
-            logger.info("No 72b model found, using first available model")
-            model_72b = models[0]["model_name"]
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            if api_base not in models_by_instance:
+                models_by_instance[api_base] = []
+            models_by_instance[api_base].append(model)
+    
+    # Print model details
+    logger.info(f"Models by source:")
+    logger.info(f"  - Static models: {len(static_models)}")
+    if static_models:
+        for i, model in enumerate(static_models):
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            logger.info(f"    {i+1}. {model_name} → {api_base}")
+    
+    logger.info(f"  - Kamiwaza models: {sum(len(models) for models in models_by_instance.values())} across {len(models_by_instance)} instances")
+    for instance_url, instance_models in models_by_instance.items():
+        logger.info(f"    • {instance_url}: {len(instance_models)} models")
+        for i, model in enumerate(instance_models):
+            model_name = model.get('model_name', 'unknown')
+            logger.info(f"      {i+1}. {model_name}")
+    
+    # Test one model from each source if available
+    models_to_test = []
+    
+    # Add one static model if available
+    if static_models:
+        models_to_test.append(static_models[0])
+    
+    # Add one model from each Kamiwaza instance
+    for instance_url, instance_models in models_by_instance.items():
+        if instance_models:
+            models_to_test.append(instance_models[0])
+    
+    # Test each selected model
+    if models_to_test:
+        logger.info(f"Testing {len(models_to_test)} models (one from each source)")
         
-        # Batch processing with multiple models
-        logger.info("Performing batch processing across all available models...")
-        batch_response = router.abatch_completion(
-            models=[m["model_name"] for m in models],
-            messages=[{"role": "user", "content": "What's your name?"}]
-        )
-        
-        for i, resp in enumerate(batch_response):
-            if isinstance(resp, Exception):
-                logger.error(f"Model #{i+1} failed with: {resp}")
-            else:
-                logger.info(f"Model #{i+1} response: {resp.choices[0].message.content}")
-        
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        for model in models_to_test:
+            model_name = model.get('model_name', 'unknown')
+            api_base = model.get('litellm_params', {}).get('api_base', 'unknown')
+            provider = model.get('model_info', {}).get('provider', 'unknown')
+            source = "static" if provider == "static" else "Kamiwaza"
+            
+            logger.info(f"\nTesting {source} model: {model_name} → {api_base}")
+            
+            try:
+                # Make a completion request
+                response = router.completion(
+                    model=model_name,
+                    messages=[{"role": "user", "content": "Explain how routers work in LiteLLM in one sentence."}],
+                    max_tokens=50
+                )
+                
+                # Print the response
+                content = response['choices'][0]['message']['content']
+                logger.info(f"Response from {model_name}:\n{content}")
+                logger.info(f"✅ Success with {model_name}")
+                
+            except Exception as e:
+                logger.error(f"❌ Error with {model_name}: {e}")
+    else:
+        logger.warning("No models available for testing")
 
 if __name__ == "__main__":
     main()
