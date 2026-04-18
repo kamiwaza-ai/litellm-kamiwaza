@@ -25,9 +25,9 @@ pip install python-dotenv
 
 ## Requirements
 
-- Python 3.7+
-- litellm>=1.0.0
-- kamiwaza-client>=0.1.0
+- Python 3.8+
+- litellm>=1.50.0 (compatible with latest LiteLLM 1.80.x)
+- kamiwaza>=0.3.3
 
 ## Usage
 
@@ -197,7 +197,7 @@ def get_static_model_configs() -> List[Dict[str, Any]]:
     """Returns a list of statically defined model configurations."""
     return [
         {
-            "model_name": "static-custom-model", 
+            "model_name": "static-custom-model",
             "litellm_params": {
                 "model": "openai/model",
                 "api_key": "your-api-key",
@@ -213,6 +213,46 @@ def get_static_model_configs() -> List[Dict[str, Any]]:
 ```
 
 The `KamiwazaRouter` will automatically detect and use these static models.
+
+### Advanced LiteLLM Router Options
+
+Since `KamiwazaRouter` extends the LiteLLM `Router` class, you can pass through any standard Router parameters:
+
+```python
+from litellm_kamiwaza import KamiwazaRouter
+
+# Using advanced Router features
+router = KamiwazaRouter(
+    kamiwaza_api_url="https://my-kamiwaza-server.com/api",
+
+    # Retry and reliability settings
+    num_retries=3,
+    timeout=30.0,
+    retry_after=5,
+    allowed_fails=2,
+    cooldown_time=60.0,
+
+    # Routing strategy options:
+    # "simple-shuffle", "least-busy", "usage-based-routing",
+    # "latency-based-routing", "cost-based-routing"
+    routing_strategy="latency-based-routing",
+
+    # Caching with Redis
+    redis_host="localhost",
+    redis_port=6379,
+    cache_responses=True,
+
+    # Fallback configurations
+    context_window_fallbacks=[],
+    content_policy_fallbacks=[],
+
+    # Debug settings
+    set_verbose=True,
+    debug_level="DEBUG",
+)
+```
+
+See the [LiteLLM Router documentation](https://docs.litellm.ai/docs/routing) for all available options.
 
 ## Contributing
 
