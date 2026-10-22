@@ -30,25 +30,49 @@ def test_repo_references_no_known_malicious_package_or_image() -> None:
     assert scan(REPO_ROOT, tracked_files(REPO_ROOT), DENY, exact_pins=False) == []
 
 
+LITELLM_DIGESTS = {
+    "sha256:bd1aeee419ea36da9aa2b657288da4101887be468f020ac63d22ba6ed84a3ea5",
+    "sha256:56b74573eed6e4aafe4b50603dbe7853e0345f188c8e44a09f1098caf1f4bcdf",
+    "sha256:24581ddc30767f16ecb69d2b0517556f2cd7dea56971adb42a3d1beb97d69523",
+    "sha256:827dd893c74cf621a860a66a3a447a5c732533f087589ce905573e285c0a239c",
+    "sha256:645a67d810628252d63df85dcc8824c58bcc77cf8383f4d3e6321f0ccc3ce9e4",
+    "sha256:f75c8edae59b72b1ebfd617295833f465c85bb2fab9c1d60f21b496db86cb8da",
+}
+
+
 def test_denylist_covers_litellm_incident() -> None:
     assert "1.107.0" in {str(v) for v in DENY.pypi["litellm"]}
-    assert len(DENY.digests) == 6
+    assert LITELLM_DIGESTS <= DENY.digests
     assert {"berriai/litellm", "litellm/litellm"} <= DENY.image_paths
 
 
-# One injected bad entry per file kind the guard reads.
+# One injected bad entry per file kind and evasion the guard must catch.
 BAD_FILES = {
     "uv.lock": '[[package]]\nname = "litellm"\nversion = "1.107.0"\n',
+    "badver/uv.lock": '[[package]]\nname = "litellm"\nversion = "not-a-version"\n',
     "requirements.txt": "litellm==1.107.0\n",
     "deploy/constraints.txt": "LiteLLM[proxy] >= 1.50.0  # open-ended\n",
     "pyproject.toml": '[project]\ndependencies = ["litellm>=1.88.6,!=1.107.0"]\n',
     "tools/pyproject.toml": "[tool.pytest]\nfilterwarnings=ignore::DeprecationWarning\n",
+    "wheel/pyproject.toml": (
+        '[project]\ndependencies = ["litellm==1.88.6"]\n[tool.uv.sources]\n'
+        'litellm = { url = "https://example.invalid/litellm-1.107.0-py3-none-any.whl" }\n'
+    ),
     "setup.py": 'from setuptools import setup\nsetup(install_requires=["litellm>=1.0.0"])\n',
     "Dockerfile": "FROM python:3.12\nRUN pip install --no-cache-dir \\\n    litellm==1.107.0\n",
+    "Dockerfile.comment": "RUN pip install --no-cache-dir \\\n    # LLM deps\n    litellm==1.107.0\n",
     "Containerfile": "FROM ghcr.io/berriai/litellm:main-latest\n",
     "Dockerfile.proxy": "FROM docker.litellm.ai/berriai/litellm-non_root:v1.106.2\n",
+    "Dockerfile.mirror": "FROM registry.example.com/mirror/berriai/litellm:v1.106.2\n",
     "scripts/setup.sh": "uv pip install 'litellm[proxy]'\n",
+    "scripts/marker.sh": "pip install \"litellm==1.107.0; python_version >= '3.8'\"\n",
+    "scripts/pip312.sh": "pip3.12 install litellm\n",
+    "scripts/from.sh": "uvx --from=litellm[proxy] litellm --port 4000\n",
+    "scripts/pull.sh": "docker pull ghcr.io/berriai/litellm:main-latest\n",
+    "kamiwaza.json": '{"extra_docker_images": ["ghcr.io/berriai/litellm:latest"]}\n',
+    "k8s/deploy.yaml": "spec:\n  containers:\n    - image: berriai/litellm:main-stable\n",
     "docker-compose.yml": f"services:\n  llm:\n    image: litellm/litellm@{BAD_AMD64}\n",
+    "env.yml": "services:\n  llm:\n    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:latest}\n",
     "charts/values.yaml": "litellm:\n  image:\n    repository: ghcr.io/berriai/litellm\n    tag: latest\n",
     ".github/workflows/ci.yml": "jobs:\n  t:\n    steps:\n      - run: uvx litellm@1.107.0 --help\n",
     "wheels/requirements.in": "https://example.invalid/litellm-1.107.0-py3-none-any.whl\n",
@@ -56,19 +80,26 @@ BAD_FILES = {
 
 CLEAN_FILES = {
     "uv.lock": '[[package]]\nname = "litellm"\nversion = "1.88.6"\n',
+    "other/uv.lock": '[[package]]\nname = "odd"\nversion = "not-a-version"\n',
     "requirements.txt": "litellm==1.88.6 \\\n    --hash=sha256:" + "b" * 64 + "\n",
     "constraints.txt": "litellm!=1.107.0,>=1.50.0\n",
     "pyproject.toml": '[project]\ndependencies = ["litellm[proxy]==1.88.6"]\n',
     "Dockerfile": (
         f"FROM ghcr.io/berriai/litellm:v1.106.2@{SAFE_DIGEST}\n"
         "# never `pip install litellm==X.Y.Z` unhashed\n"
+        "# FROM ghcr.io/berriai/litellm:main-latest\n"
         "RUN pip install litellm==1.88.6\n"
+        "RUN pip install httpx  # mirrors litellm docs\n"
     ),
-    "docker-compose.yml": "# docs: https://github.com/berriai/litellm\nservices: {}\n",
+    "scripts/docs.sh": "echo 'see https://hub.docker.com/r/berriai/litellm'\n",
+    "scripts/proxy.sh": "uvx --from=litellm[proxy]==1.88.6 litellm --port 4000\n",
+    "docker-compose.yml": "services:\n  web:\n    labels:\n      docs: github.com/berriai/litellm\n",
     "values.yaml": f"image:\n  repository: berriai/litellm\n  digest: {SAFE_DIGEST}\n",
+    "frontend/pnpm-lock.yaml": "packages:\n  /litellm@1.107.0: {}\n",
     "setup.py": (
         "from setuptools import setup\n"
-        'setup(keywords=["litellm"], install_requires=["litellm>=1.0,<1.107.0"])\n'
+        'setup(keywords=["litellm"], install_requires=["litellm>=1.0,<1.107.0"],\n'
+        '      extras_require={"litellm": ["litellm==1.88.6"]})\n'
     ),
 }
 

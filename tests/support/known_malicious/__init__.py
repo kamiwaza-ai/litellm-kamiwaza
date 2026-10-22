@@ -1,8 +1,9 @@
 """Static guard against known-malicious package versions and container images.
 
 The denylist is security/known-malicious-packages.json. The guard reads every
-tracked lockfile, requirements/constraints file, pyproject.toml, setup.py,
-Dockerfile, shell script, compose file, Helm values file and CI workflow, and
+tracked uv/poetry/pdm lockfile, requirements/constraints file, pyproject.toml,
+setup.py, Dockerfile/Containerfile, docker-bake file, shell script, Makefile,
+YAML file (compose, Helm values, workflows, manifests) and kamiwaza.json, and
 reports:
 
 - a lockfile entry that resolves a denylisted version;
@@ -10,8 +11,9 @@ reports:
   (an unpinned or open-ended spec admits it too);
 - optionally, a direct pyproject requirement on a denylisted package that is
   not an exact ``==`` pin;
-- a denylisted image digest anywhere, or a watched image (any registry or
-  mirror) referenced by a mutable tag instead of an ``@sha256`` digest.
+- a denylisted image digest, or a watched image (any registry or mirror)
+  referenced by a mutable tag instead of an ``@sha256`` digest, in any of those
+  files except lockfiles, requirements files, pyproject.toml and setup.py.
 """
 
 from __future__ import annotations
@@ -20,16 +22,11 @@ import re
 import subprocess
 from pathlib import Path
 
-try:  # Python 3.11+
-    import tomllib
-except ModuleNotFoundError:  # Python 3.8-3.10
-    import tomli as tomllib
-
+from .commands import scan_commands
 from .denylist import DENYLIST_PATH, Denylist, load_denylist
 from .images import scan_images, scan_yaml
 from .packages import (
     scan_artifacts,
-    scan_commands,
     scan_lock,
     scan_pyproject,
     scan_requirements,
@@ -70,7 +67,7 @@ def _scan_file(rel: str, text: str, deny: Denylist, exact_pins: bool) -> list[st
 def _run(scanner, text: str, deny: Denylist, exact_pins: bool) -> list[str]:
     try:
         return scanner(text, deny, exact_pins)
-    except tomllib.TOMLDecodeError as exc:
+    except ValueError as exc:  # TOML, requirement or version that will not parse
         return [
             f"cannot parse ({exc}), so cannot verify it excludes denylisted versions"
         ]
@@ -96,12 +93,12 @@ _SCANNERS = (
         lambda t, d, _: scan_commands(t, d) + scan_images(t, d),
     ),
     (
-        _f(r"((docker-)?compose[^/]*|values[^/]*)\.ya?ml"),
-        lambda t, d, _: scan_yaml(t, d),
-    ),
+        _f(r"[^/]*-lock\.ya?ml"),
+        lambda *_: [],
+    ),  # pnpm/npm lockfiles: no Python or images
+    (_f(r"([^/]*\.ya?ml|kamiwaza\.json)"), lambda t, d, _: scan_yaml(t, d)),
     (
-        re.compile(r"^\.github/workflows/[^/]+\.ya?ml$"),
-        lambda t, d, _: scan_yaml(t, d),
+        _f(r"([^/]*\.(sh|mk)|makefile)"),
+        lambda t, d, _: scan_commands(t, d) + scan_images(t, d),
     ),
-    (_f(r"([^/]*\.(sh|mk)|makefile)"), lambda t, d, _: scan_commands(t, d)),
 )

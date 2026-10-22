@@ -6,10 +6,17 @@ import re
 
 import yaml
 
+from .commands import scan_commands
 from .denylist import DIGEST, Denylist
-from .packages import scan_commands
 
-_NOT_REGISTRIES = {"github.com", "raw.githubusercontent.com", "pypi.org"}
+# Hosts whose berriai/litellm paths are web pages, not pullable images.
+_NOT_REGISTRIES = {
+    "github.com",
+    "raw.githubusercontent.com",
+    "pypi.org",
+    "hub.docker.com",
+    "docs.litellm.ai",
+}
 
 
 def _image_pattern(deny: Denylist) -> re.Pattern[str]:
@@ -17,19 +24,31 @@ def _image_pattern(deny: Denylist) -> re.Pattern[str]:
         re.escape(p) for p in sorted(deny.image_paths, key=len, reverse=True)
     )
     return re.compile(
-        rf"(?<![\w.-])(?:(?P<registry>[a-z0-9.-]+(?::\d+)?)/)?(?P<path>{paths})(?![\w./-])"
+        # Start at a token boundary; `:-` (a shell/compose default) is allowed.
+        r"(?<![\w./])(?<![\w.]-)"
+        r"(?:(?P<registry>[a-z0-9][a-z0-9.-]*(?::\d+)?(?:/[a-z0-9._-]+)*)/)?"
+        rf"(?P<path>{paths})(?![\w./-])"
         r"(?P<tag>:[\w.${}-]+)?(?P<digest>@sha256:[0-9a-f]{64})?"
     )
 
 
+def _uncommented(text: str) -> str:
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def _is_web_page(match: re.Match[str]) -> bool:
+    return (match.group("registry") or "").split("/")[0] in _NOT_REGISTRIES
+
+
 def scan_images(text: str, deny: Denylist) -> list[str]:
+    text = _uncommented(text)
     hits = [
         f"references known-malicious image digest {d}"
         for d in deny.digests
         if d[7:] in text
     ]
     for m in _image_pattern(deny).finditer(text):
-        if m.group("registry") in _NOT_REGISTRIES:
+        if _is_web_page(m):
             continue
         if not m.group("digest"):
             hits.append(
