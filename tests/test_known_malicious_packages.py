@@ -25,8 +25,8 @@ SAFE_DIGEST = "sha256:" + "a" * 64
 
 
 def test_repo_references_no_known_malicious_package_or_image() -> None:
-    # exact_pins=False: this repo has no lockfile; it caps litellm with a range
-    # that excludes every denylisted version instead of an exact == pin.
+    # exact_pins=False: litellm is capped here with a range that excludes every
+    # denylisted version, rather than locked to an exact == pin.
     assert scan(REPO_ROOT, tracked_files(REPO_ROOT), DENY, exact_pins=False) == []
 
 
@@ -73,6 +73,7 @@ BAD_FILES = {
     "Containerfile": "FROM ghcr.io/berriai/litellm:main-latest\n",
     "Dockerfile.proxy": "FROM docker.litellm.ai/berriai/litellm-non_root:v1.106.2\n",
     "Dockerfile.mirror": "FROM registry.example.com/mirror/berriai/litellm:v1.106.2\n",
+    "Dockerfile.varreg": "FROM ${REGISTRY:-ghcr.io}/berriai/litellm:main-latest\n",
     "scripts/setup.sh": "uv pip install 'litellm[proxy]'\n",
     "scripts/marker.sh": "pip install \"litellm==1.107.0; python_version >= '3.8'\"\n",
     "scripts/pip312.sh": "pip3.12 install litellm\n",

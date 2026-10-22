@@ -25,8 +25,9 @@ def _image_pattern(deny: Denylist) -> re.Pattern[str]:
         re.escape(p) for p in sorted(deny.image_paths, key=len, reverse=True)
     )
     return re.compile(
-        # Start at a token boundary; `:-` (a shell/compose default) is allowed.
-        r"(?<![\w./])(?<![\w.]-)"
+        # Start at a token boundary. `:-` (a shell/compose default) is allowed, and so is
+        # `}/`, a variable registry prefix such as `${REGISTRY:-ghcr.io}/berriai/...`.
+        r"(?:(?<=\}/)|(?<![\w./])(?<![\w.]-))"
         r"(?:(?P<registry>[a-z0-9][a-z0-9.-]*(?::\d+)?(?:/[a-z0-9._-]+)*)/)?"
         rf"(?P<path>{paths})(?![\w./-])"
         r"(?P<tag>:[\w.${}-]+)?(?P<digest>@sha256:[0-9a-f]{64})?"

@@ -189,13 +189,16 @@ def _setup_cfg_values(parser: configparser.ConfigParser) -> list[str]:
     return values
 
 
-def scan_setup_cfg(text: str, deny: Denylist) -> list[str]:
+def _setup_cfg_specs(text: str) -> list[str]:
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read_string(text)
     except configparser.Error as exc:
         raise ValueError(str(exc)) from exc
     lines = [ln.strip() for v in _setup_cfg_values(parser) for ln in v.splitlines()]
-    specs = [ln for ln in lines if ln and not ln.startswith("#")]
-    hits = [check_requirement(spec, deny) for spec in specs]
+    return [ln for ln in lines if ln and not ln.startswith("#")]
+
+
+def scan_setup_cfg(text: str, deny: Denylist) -> list[str]:
+    hits = [check_requirement(spec, deny) for spec in _setup_cfg_specs(text)]
     return [h for h in hits if h] + scan_artifacts(text, deny)
