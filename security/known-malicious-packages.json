@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Known-malicious package versions and container image digests that no build, lockfile, Dockerfile, compose file, Helm values file or CI workflow in this repo may reference.",
+    "Enforced by tests/test_known_malicious_packages.py (run: pytest tests/ -m 'not integration'). To respond to a new supply-chain incident, add the bad versions/digests here and cite the advisory in 'incidents'.",
+    "Any image under an 'images' repository, and any mirror of it, must also be referenced by digest (never by a mutable tag): the attacker can repoint tags."
+  ],
+  "incidents": [
+    {
+      "id": "litellm-2026-10-21",
+      "summary": "LiteLLM supply-chain compromise: credential-stealing litellm 1.107.0 on PyPI (2026-10-21 11:39-13:20 UTC) and malicious BerriAI images pushed as v1.107.0, latest, main-latest and main-stable (removed ~13:53 UTC).",
+      "references": [
+        "https://www.wiz.io/blog/litellm-compromised-steals-credentials"
+      ],
+      "mutable_tags_pushed": ["v1.107.0", "latest", "main-latest", "main-stable"]
+    }
+  ],
+  "pypi": {
+    "litellm": ["1.107.0"]
+  },
+  "images": {
+    "ghcr.io/berriai/litellm": [
+      "sha256:bd1aeee419ea36da9aa2b657288da4101887be468f020ac63d22ba6ed84a3ea5",
+      "sha256:56b74573eed6e4aafe4b50603dbe7853e0345f188c8e44a09f1098caf1f4bcdf"
+    ],
+    "ghcr.io/berriai/litellm-database": [
+      "sha256:24581ddc30767f16ecb69d2b0517556f2cd7dea56971adb42a3d1beb97d69523",
+      "sha256:827dd893c74cf621a860a66a3a447a5c732533f087589ce905573e285c0a239c"
+    ],
+    "ghcr.io/berriai/litellm-non_root": [
+      "sha256:645a67d810628252d63df85dcc8824c58bcc77cf8383f4d3e6321f0ccc3ce9e4",
+      "sha256:f75c8edae59b72b1ebfd617295833f465c85bb2fab9c1d60f21b496db86cb8da"
+    ],
+    "docker.io/litellm/litellm": [
+      "sha256:bd1aeee419ea36da9aa2b657288da4101887be468f020ac63d22ba6ed84a3ea5",
+      "sha256:56b74573eed6e4aafe4b50603dbe7853e0345f188c8e44a09f1098caf1f4bcdf"
+    ]
+  }
+}

@@ -7,6 +7,7 @@ name = "litellm-kamiwaza"
 version = "0.1.5"
 description = "LiteLLM Router integration for Kamiwaza AI"
 readme = "README.md"
+requires-python = ">=3.10"
 authors = [{name = "Matt Wallace", email = "matt@kamiwaza.ai"}]
 license = {text = "MIT"}
 classifiers = [
@@ -15,7 +16,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "litellm>=1.50.0",
+    # <1.107.0: litellm 1.107.0 was malicious (2026-10-21); raise only after review.
+    "litellm>=1.50.0,<1.107.0",
     "kamiwaza>=0.3.3.0",
 ]
 
