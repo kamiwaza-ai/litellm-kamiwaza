@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import yaml
@@ -40,13 +41,17 @@ def _is_web_page(match: re.Match[str]) -> bool:
     return (match.group("registry") or "").split("/")[0] in _NOT_REGISTRIES
 
 
-def scan_images(text: str, deny: Denylist) -> list[str]:
-    text = _uncommented(text)
-    hits = [
+def denylisted_digests(text: str, deny: Denylist) -> list[str]:
+    return [
         f"references known-malicious image digest {d}"
         for d in deny.digests
         if d[7:] in text
     ]
+
+
+def scan_images(text: str, deny: Denylist) -> list[str]:
+    text = _uncommented(text)
+    hits = denylisted_digests(text, deny)
     for m in _image_pattern(deny).finditer(text):
         if _is_web_page(m):
             continue
@@ -54,6 +59,16 @@ def scan_images(text: str, deny: Denylist) -> list[str]:
             hits.append(
                 f"image '{m.group()}' must be pinned by @sha256 digest, not a mutable tag"
             )
+    return hits
+
+
+def scan_json(text: str, deny: Denylist) -> list[str]:
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return scan_commands(text, deny) + scan_images(text, deny)
+    hits: list[str] = []
+    _walk_yaml(doc, deny, hits)
     return hits
 
 
@@ -80,6 +95,7 @@ def _walk_yaml(node: object, deny: Denylist, hits: list[str]) -> None:
 
 def _walk_yaml_mapping(node: dict, deny: Denylist, hits: list[str]) -> None:
     if isinstance(node.get("repository"), str):
+        hits += denylisted_digests(node["repository"], deny)
         hits += _check_split_image(node, deny)
     for value in (v for k, v in node.items() if k != "repository"):
         _walk_yaml(value, deny, hits)
@@ -90,8 +106,10 @@ def _check_split_image(node: dict, deny: Denylist) -> list[str]:
     ref = "/".join(str(p) for p in (node.get("registry"), node["repository"]) if p)
     if not _image_pattern(deny).search(ref):
         return []
-    digest = str(node.get("digest") or "")
-    if not DIGEST.fullmatch(digest):
+    parts = (str(node.get(k) or "") for k in ("digest", "repository", "tag"))
+    found = DIGEST.search(" ".join(parts))  # a digest key, or an inline @sha256
+    digest = found.group() if found else ""
+    if not digest:
         return [f"image '{ref}' must set an @sha256 digest, not only a mutable tag"]
     if digest in deny.digests:
         return [f"image '{ref}' uses known-malicious digest {digest}"]

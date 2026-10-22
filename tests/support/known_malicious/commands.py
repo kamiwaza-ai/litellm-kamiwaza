@@ -9,7 +9,7 @@ from .denylist import Denylist
 from .packages import ARCHIVE, check_requirement, logical_lines, scan_artifacts
 
 _INSTALL = re.compile(
-    r"\b(?:pip(?:3(?:\.\d+)?)?|pipx|poetry|pdm|pipenv|uv(?:\s+tool)?)\s+(?:install|add)\b"
+    r"\b(?:pip(?:3(?:\.\d+)?)?|pipx|poetry|pdm|pipenv|uv(?:\s+tool)?)\s+(?:install|add|download|wheel)\b"
     r"|\buv\s+(?:tool\s+)?run\b|\buvx\b"
 )
 _RUNNERS = re.compile(r"uvx|.*\brun")  # their positional args after --from are commands
@@ -31,8 +31,8 @@ def _install_args(segment: str) -> list[str]:
     rest = segment[match.end() :]
     try:
         args = shlex.split(rest, comments=True)
-    except ValueError:
-        args = rest.split()
+    except ValueError:  # e.g. the tail of `bash -c "pip install 'pkg==1'"`
+        args = [a.strip("'\"") for a in rest.split()]
     args = [part for a in args for part in _split_option_value(a)]
     if _RUNNERS.fullmatch(match.group()) and "--from" in args[:-1]:
         return [args[args.index("--from") + 1]]  # the rest is the command name

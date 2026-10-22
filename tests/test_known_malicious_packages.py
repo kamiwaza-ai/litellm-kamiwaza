@@ -41,7 +41,8 @@ LITELLM_DIGESTS = {
 
 
 def test_denylist_covers_litellm_incident() -> None:
-    assert "1.107.0" in {str(v) for v in DENY.pypi["litellm"]}
+    assert {"1.82.7", "1.82.8", "1.107.0"} <= {str(v) for v in DENY.pypi["litellm"]}
+    assert {"4.87.1", "4.87.2"} <= {str(v) for v in DENY.pypi["telnyx"]}
     assert LITELLM_DIGESTS <= DENY.digests
     assert {"berriai/litellm", "litellm/litellm"} <= DENY.image_paths
 
@@ -51,6 +52,10 @@ BAD_FILES = {
     "uv.lock": '[[package]]\nname = "litellm"\nversion = "1.107.0"\n',
     "badver/uv.lock": '[[package]]\nname = "litellm"\nversion = "not-a-version"\n',
     "requirements.txt": "litellm==1.107.0\n",
+    "ci/constraints/linux-cpu.txt": "litellm==1.82.8\n",
+    "requirements/base.in": "telnyx==4.87.1\n",
+    "vcs/requirements.txt": "litellm @ git+https://github.com/BerriAI/litellm@v1.107.0\n",
+    "lock2/uv.lock": '[[package]]\nname = "litellm"\nversion = "1.82.8"\n',
     "deploy/constraints.txt": "LiteLLM[proxy] >= 1.50.0  # open-ended\n",
     "pyproject.toml": '[project]\ndependencies = ["litellm>=1.88.6,!=1.107.0"]\n',
     "tools/pyproject.toml": "[tool.pytest]\nfilterwarnings=ignore::DeprecationWarning\n",
@@ -59,6 +64,10 @@ BAD_FILES = {
         'litellm = { url = "https://example.invalid/litellm-1.107.0-py3-none-any.whl" }\n'
     ),
     "setup.py": 'from setuptools import setup\nsetup(install_requires=["litellm>=1.0.0"])\n',
+    "url/setup.py": (
+        "from setuptools import setup\nsetup(install_requires=["
+        '"litellm @ https://example.invalid/litellm-1.107.0-py3-none-any.whl"])\n'
+    ),
     "Dockerfile": "FROM python:3.12\nRUN pip install --no-cache-dir \\\n    litellm==1.107.0\n",
     "Dockerfile.comment": "RUN pip install --no-cache-dir \\\n    # LLM deps\n    litellm==1.107.0\n",
     "Containerfile": "FROM ghcr.io/berriai/litellm:main-latest\n",
@@ -69,6 +78,10 @@ BAD_FILES = {
     "scripts/pip312.sh": "pip3.12 install litellm\n",
     "scripts/from.sh": "uvx --from=litellm[proxy] litellm --port 4000\n",
     "scripts/pull.sh": "docker pull ghcr.io/berriai/litellm:main-latest\n",
+    "scripts/bashc.sh": "bash -c \"pip install 'litellm==1.107.0'\"\n",
+    "scripts/download.sh": "pip download litellm==1.107.0 -d wheels\n",
+    "static/garden/apps.json": '{"apps": [{"image": "ghcr.io/berriai/litellm:latest"}]}\n',
+    "mirror/values.yaml": f"image:\n  repository: internal.io/mirror@{BAD_AMD64}\n",
     "kamiwaza.json": '{"extra_docker_images": ["ghcr.io/berriai/litellm:latest"]}\n',
     "k8s/deploy.yaml": "spec:\n  containers:\n    - image: berriai/litellm:main-stable\n",
     "docker-compose.yml": f"services:\n  llm:\n    image: litellm/litellm@{BAD_AMD64}\n",
@@ -82,7 +95,7 @@ CLEAN_FILES = {
     "uv.lock": '[[package]]\nname = "litellm"\nversion = "1.88.6"\n',
     "other/uv.lock": '[[package]]\nname = "odd"\nversion = "not-a-version"\n',
     "requirements.txt": "litellm==1.88.6 \\\n    --hash=sha256:" + "b" * 64 + "\n",
-    "constraints.txt": "litellm!=1.107.0,>=1.50.0\n",
+    "constraints.txt": "litellm!=1.82.7,!=1.82.8,!=1.107.0,>=1.50.0\n",
     "pyproject.toml": '[project]\ndependencies = ["litellm[proxy]==1.88.6"]\n',
     "Dockerfile": (
         f"FROM ghcr.io/berriai/litellm:v1.106.2@{SAFE_DIGEST}\n"
@@ -96,9 +109,13 @@ CLEAN_FILES = {
     "docker-compose.yml": "services:\n  web:\n    labels:\n      docs: github.com/berriai/litellm\n",
     "values.yaml": f"image:\n  repository: berriai/litellm\n  digest: {SAFE_DIGEST}\n",
     "frontend/pnpm-lock.yaml": "packages:\n  /litellm@1.107.0: {}\n",
+    "frontend/package-lock.json": '{"packages": {"x": {"resolved": "berriai/litellm:latest"}}}\n',
+    "scripts/shc.sh": 'sh -c "pip install litellm==1.88.6"\n',
+    "inline/values.yaml": f"image:\n  repository: ghcr.io/berriai/litellm@{SAFE_DIGEST}\n",
+    "engine-catalog.json": f'{{"image": "ghcr.io/berriai/litellm@{SAFE_DIGEST}"}}\n',
     "setup.py": (
         "from setuptools import setup\n"
-        'setup(keywords=["litellm"], install_requires=["litellm>=1.0,<1.107.0"],\n'
+        'setup(keywords=["litellm"], install_requires=["litellm>=1.83.0,<1.107.0"],\n'
         '      extras_require={"litellm": ["litellm==1.88.6"]})\n'
     ),
 }

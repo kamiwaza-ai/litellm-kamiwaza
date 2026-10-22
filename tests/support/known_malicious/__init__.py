@@ -3,8 +3,8 @@
 The denylist is security/known-malicious-packages.json. The guard reads every
 tracked uv/poetry/pdm lockfile, requirements/constraints file, pyproject.toml,
 setup.py, Dockerfile/Containerfile, docker-bake file, shell script, Makefile,
-YAML file (compose, Helm values, workflows, manifests) and kamiwaza.json, and
-reports:
+YAML file (compose, Helm values, workflows, manifests) and JSON file
+(kamiwaza.json, App Garden and engine catalogs), and reports:
 
 - a lockfile entry that resolves a denylisted version;
 - a requirement or install command whose specifier admits a denylisted version
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from .commands import scan_commands
 from .denylist import DENYLIST_PATH, Denylist, load_denylist
-from .images import scan_images, scan_yaml
+from .images import scan_images, scan_json, scan_yaml
 from .packages import (
     scan_artifacts,
     scan_lock,
@@ -50,8 +50,8 @@ def scan(
     found: set[str] = set()
     for rel in files:
         path = root / rel
-        if not path.is_file():
-            continue
+        if rel == DENYLIST_PATH or not path.is_file():
+            continue  # the denylist necessarily names what it denies
         text = path.read_text(errors="replace")
         found.update(f"{rel}: {msg}" for msg in _scan_file(rel, text, deny, exact_pins))
     return sorted(found)
@@ -83,7 +83,10 @@ _SCANNERS = (
     (_f(r"pyproject\.toml"), scan_pyproject),
     (_f(r"setup\.py"), lambda t, d, _: scan_setup_py(t, d)),
     (
-        _f(r"[^/]*(requirements|constraints)[^/]*\.(txt|in)"),
+        # requirements-dev.txt, *.constraints.txt, requirements/base.txt, ci/constraints/x.txt
+        _f(
+            r"([^/]*(requirements|constraints)[^/]*|(requirements|constraints)/.+)\.(txt|in)"
+        ),
         lambda t, d, _: scan_requirements(t, d) + scan_artifacts(t, d),
     ),
     (
@@ -92,11 +95,10 @@ _SCANNERS = (
         ),
         lambda t, d, _: scan_commands(t, d) + scan_images(t, d),
     ),
-    (
-        _f(r"[^/]*-lock\.ya?ml"),
-        lambda *_: [],
-    ),  # pnpm/npm lockfiles: no Python or images
-    (_f(r"([^/]*\.ya?ml|kamiwaza\.json)"), lambda t, d, _: scan_yaml(t, d)),
+    # npm/pnpm lockfiles carry no Python packages or images.
+    (_f(r"([^/]*-lock\.(ya?ml|json)|npm-shrinkwrap\.json)"), lambda *_: []),
+    (_f(r"[^/]*\.ya?ml"), lambda t, d, _: scan_yaml(t, d)),
+    (_f(r"[^/]*\.json"), lambda t, d, _: scan_json(t, d)),
     (
         _f(r"([^/]*\.(sh|mk)|makefile)"),
         lambda t, d, _: scan_commands(t, d) + scan_images(t, d),

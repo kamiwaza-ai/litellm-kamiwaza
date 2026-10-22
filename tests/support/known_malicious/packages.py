@@ -155,7 +155,7 @@ def scan_setup_py(text: str, deny: Denylist) -> list[str]:
             f"cannot parse ({exc}), so cannot verify it excludes denylisted versions"
         ]
     hits = [check_requirement(spec, deny) for spec in _setup_specs(tree)]
-    return [h for h in hits if h]
+    return [h for h in hits if h] + scan_artifacts(text, deny)
 
 
 def scan_artifacts(text: str, deny: Denylist) -> list[str]:
@@ -164,6 +164,7 @@ def scan_artifacts(text: str, deny: Denylist) -> list[str]:
         name_re = re.escape(name).replace("-", "[-_.]")
         for version in versions:
             pattern = rf"(?<![\w.-]){name_re}-{re.escape(version)}(?=-|\.tar|\.zip)"
-            if re.search(pattern, text, re.I):
+            vcs = rf"/{name_re}(?:\.git)?@v?{re.escape(version)}(?![\w.])"
+            if re.search(pattern, text, re.I) or re.search(vcs, text, re.I):
                 hits.append(f"references a known-malicious {name} {version} artifact")
     return hits

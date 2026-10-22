@@ -2,7 +2,8 @@
   "_comment": [
     "Known-malicious package versions and container image digests that no build, lockfile, Dockerfile, compose file, Helm values file or CI workflow in this repo may reference.",
     "Enforced by tests/test_known_malicious_packages.py (run: pytest tests/ -m 'not integration'). To respond to a new supply-chain incident, add the bad versions/digests here and cite the advisory in 'incidents'.",
-    "Any image under an 'images' repository, and any mirror of it, must also be referenced by digest (never by a mutable tag): the attacker can repoint tags."
+    "Any image under an 'images' repository, and any mirror of it, must also be referenced by digest (never by a mutable tag): the attacker can repoint tags.",
+    "PyPI denylists are per package; image digests are the per-architecture digests the advisory publishes (docker.io/litellm/litellm shares the ghcr.io/berriai/litellm pair)."
   ],
   "incidents": [
     {
@@ -11,11 +12,32 @@
       "references": [
         "https://www.wiz.io/blog/litellm-compromised-steals-credentials"
       ],
-      "mutable_tags_pushed": ["v1.107.0", "latest", "main-latest", "main-stable"]
+      "mutable_tags_pushed": [
+        "v1.107.0",
+        "latest",
+        "main-latest",
+        "main-stable"
+      ]
+    },
+    {
+      "id": "teampcp-2026-03",
+      "summary": "TeamPCP supply-chain campaign: credential-stealing litellm 1.82.7 and 1.82.8 (2026-03-24; 1.82.8 adds a .pth launcher that runs on every Python start) and backdoored telnyx 4.87.1 and 4.87.2 (2026-03-27).",
+      "references": [
+        "https://securitylabs.datadoghq.com/articles/litellm-compromised-pypi-teampcp-supply-chain-campaign/",
+        "https://futuresearch.ai/blog/litellm-pypi-supply-chain-attack/"
+      ]
     }
   ],
   "pypi": {
-    "litellm": ["1.107.0"]
+    "litellm": [
+      "1.82.7",
+      "1.82.8",
+      "1.107.0"
+    ],
+    "telnyx": [
+      "4.87.1",
+      "4.87.2"
+    ]
   },
   "images": {
     "ghcr.io/berriai/litellm": [
