@@ -3,4 +3,5 @@ include README.md
 include pyproject.toml
 recursive-include litellm_kamiwaza *.py
 recursive-include tests *.py
+include security/known-malicious-packages.json
 recursive-include examples *.py
