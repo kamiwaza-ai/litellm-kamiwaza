@@ -75,11 +75,14 @@ def _walk_yaml(node: object, deny: Denylist, hits: list[str]) -> None:
         for item in node:
             _walk_yaml(item, deny, hits)
     elif isinstance(node, dict):
-        if isinstance(node.get("repository"), str):
-            hits += _check_split_image(node, deny)
-        for key, value in node.items():
-            if key != "repository":
-                _walk_yaml(value, deny, hits)
+        _walk_yaml_mapping(node, deny, hits)
+
+
+def _walk_yaml_mapping(node: dict, deny: Denylist, hits: list[str]) -> None:
+    if isinstance(node.get("repository"), str):
+        hits += _check_split_image(node, deny)
+    for value in (v for k, v in node.items() if k != "repository"):
+        _walk_yaml(value, deny, hits)
 
 
 def _check_split_image(node: dict, deny: Denylist) -> list[str]:

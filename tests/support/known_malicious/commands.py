@@ -40,9 +40,13 @@ def _install_args(segment: str) -> list[str]:
 
 
 def _is_spec_token(token: str) -> bool:
-    return not (
-        token.startswith("-") or "/" in token or "*" in token or token.endswith(ARCHIVE)
+    markers = (
+        token.startswith("-"),
+        "/" in token,
+        "*" in token,
+        token.endswith(ARCHIVE),
     )
+    return not any(markers)  # options, paths, globs and archives are not specs
 
 
 def _install_specs(text: str) -> list[str]:

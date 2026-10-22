@@ -111,14 +111,15 @@ def _exact_pin_violation(spec: str, deny: Denylist) -> str | None:
         return None  # check_requirement already reports it as unverifiable
     if canonicalize_name(req.name) not in deny.pypi or req.url:
         return None
-    pins = list(req.specifier)
-    if (
-        len(pins) == 1
-        and pins[0].operator in ("==", "===")
-        and "*" not in pins[0].version
-    ):
+    if _is_exact_pin(list(req.specifier)):
         return None
     return f"direct requirement '{spec}' must be an exact == pin"
+
+
+def _is_exact_pin(pins: list) -> bool:
+    if len(pins) != 1:
+        return False
+    return pins[0].operator in ("==", "===") and "*" not in pins[0].version
 
 
 def scan_pyproject(text: str, deny: Denylist, exact_pins: bool) -> list[str]:
