@@ -25,8 +25,8 @@ pip install python-dotenv
 
 ## Requirements
 
-- Python 3.8+
-- litellm>=1.50.0 (compatible with latest LiteLLM 1.80.x)
+- Python 3.10+
+- litellm>=1.50.0,!=1.82.7,!=1.82.8,<1.107.0 (1.82.7, 1.82.8 and 1.107.0 were malicious releases; the cap is raised only after review)
 - kamiwaza>=0.3.3
 
 ## Usage

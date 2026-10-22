@@ -80,6 +80,10 @@ BAD_FILES = {
     "scripts/pull.sh": "docker pull ghcr.io/berriai/litellm:main-latest\n",
     "scripts/bashc.sh": "bash -c \"pip install 'litellm==1.107.0'\"\n",
     "scripts/download.sh": "pip download litellm==1.107.0 -d wheels\n",
+    "scripts/wild.sh": "pip install 'litellm==1.107.*'\n",
+    "groups/pyproject.toml": '[dependency-groups]\ndev = "litellm==1.107.0"\n',
+    "tooltype/pyproject.toml": 'tool = "x"\n',
+    "setup.cfg": "[options]\ninstall_requires =\n    httpx\n    litellm>=1.0\n",
     "static/garden/apps.json": '{"apps": [{"image": "ghcr.io/berriai/litellm:latest"}]}\n',
     "mirror/values.yaml": f"image:\n  repository: internal.io/mirror@{BAD_AMD64}\n",
     "kamiwaza.json": '{"extra_docker_images": ["ghcr.io/berriai/litellm:latest"]}\n',
@@ -111,6 +115,10 @@ CLEAN_FILES = {
     "frontend/pnpm-lock.yaml": "packages:\n  /litellm@1.107.0: {}\n",
     "frontend/package-lock.json": '{"packages": {"x": {"resolved": "berriai/litellm:latest"}}}\n',
     "scripts/shc.sh": 'sh -c "pip install litellm==1.88.6"\n',
+    "pkg/setup.cfg": (
+        "[options]\ninstall_requires =\n    litellm==1.88.6\n"
+        "[options.extras_require]\nproxy = litellm[proxy]==1.88.6\n"
+    ),
     "inline/values.yaml": f"image:\n  repository: ghcr.io/berriai/litellm@{SAFE_DIGEST}\n",
     "engine-catalog.json": f'{{"image": "ghcr.io/berriai/litellm@{SAFE_DIGEST}"}}\n',
     "setup.py": (

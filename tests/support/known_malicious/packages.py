@@ -1,8 +1,9 @@
-"""Python package checks: lockfiles, requirements, pyproject.toml and setup.py."""
+"""Python package checks: lockfiles, requirements, pyproject.toml, setup.py/.cfg."""
 
 from __future__ import annotations
 
 import ast
+import configparser
 import re
 
 try:  # Python 3.11+
@@ -85,23 +86,33 @@ def scan_requirements(text: str, deny: Denylist) -> list[str]:
     return [h for h in hits if h]
 
 
+def _specs(value: object) -> list[str]:
+    """Requirement strings from a manifest list; a malformed entry fails closed."""
+    if not isinstance(value, list):
+        raise ValueError(f"expected a list of requirements, got {value!r}")
+    return [v for v in value if isinstance(v, str)]  # skips {include-group = ...}
+
+
+def _table(data: dict, key: str) -> dict:
+    value = data.get(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"[{key}] must be a table, got {value!r}")
+    return value
+
+
 def _pyproject_requirements(data: dict) -> tuple[list[str], list[str]]:
-    project, uv = data.get("project", {}), data.get("tool", {}).get("uv", {})
-    direct = list(project.get("dependencies", []))
-    direct += [
-        r for group in project.get("optional-dependencies", {}).values() for r in group
+    project, tool = _table(data, "project"), _table(data, "tool")
+    uv = _table(tool, "uv")
+    groups = [
+        *_table(project, "optional-dependencies").values(),
+        *_table(data, "dependency-groups").values(),
     ]
-    direct += [
-        r
-        for g in data.get("dependency-groups", {}).values()
-        for r in g
-        if isinstance(r, str)
-    ]
-    direct += list(uv.get("dev-dependencies", []))
-    indirect = list(uv.get("constraint-dependencies", [])) + list(
-        uv.get("override-dependencies", [])
-    )
-    return direct, indirect + list(data.get("build-system", {}).get("requires", []))
+    direct = _specs(project.get("dependencies", []))
+    direct += [spec for group in groups for spec in _specs(group)]
+    direct += _specs(uv.get("dev-dependencies", []))
+    indirect = _specs(uv.get("constraint-dependencies", []))
+    indirect += _specs(uv.get("override-dependencies", []))
+    return direct, indirect + _specs(_table(data, "build-system").get("requires", []))
 
 
 def _exact_pin_violation(spec: str, deny: Denylist) -> str | None:
@@ -168,3 +179,23 @@ def scan_artifacts(text: str, deny: Denylist) -> list[str]:
             if re.search(pattern, text, re.I) or re.search(vcs, text, re.I):
                 hits.append(f"references a known-malicious {name} {version} artifact")
     return hits
+
+
+def _setup_cfg_values(parser: configparser.ConfigParser) -> list[str]:
+    keys = ("install_requires", "setup_requires", "tests_require")
+    values = [parser.get("options", k, fallback="") for k in keys]
+    if parser.has_section("options.extras_require"):
+        values += [v for _, v in parser.items("options.extras_require")]
+    return values
+
+
+def scan_setup_cfg(text: str, deny: Denylist) -> list[str]:
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(text)
+    except configparser.Error as exc:
+        raise ValueError(str(exc)) from exc
+    lines = [ln.strip() for v in _setup_cfg_values(parser) for ln in v.splitlines()]
+    specs = [ln for ln in lines if ln and not ln.startswith("#")]
+    hits = [check_requirement(spec, deny) for spec in specs]
+    return [h for h in hits if h] + scan_artifacts(text, deny)

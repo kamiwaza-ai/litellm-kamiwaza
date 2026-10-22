@@ -1,8 +1,9 @@
 """Static guard against known-malicious package versions and container images.
 
 The denylist is security/known-malicious-packages.json. The guard reads every
-tracked uv/poetry/pdm lockfile, requirements/constraints file, pyproject.toml,
-setup.py, Dockerfile/Containerfile, docker-bake file, shell script, Makefile,
+tracked uv/poetry/pdm lockfile, requirements/constraints file, pyproject.toml
+(PEP 621, dependency-groups and uv tables; not [tool.poetry]), setup.py,
+setup.cfg, Dockerfile/Containerfile, docker-bake file, shell script, Makefile,
 YAML file (compose, Helm values, workflows, manifests) and JSON file
 (kamiwaza.json, App Garden and engine catalogs), and reports:
 
@@ -30,6 +31,7 @@ from .packages import (
     scan_lock,
     scan_pyproject,
     scan_requirements,
+    scan_setup_cfg,
     scan_setup_py,
 )
 
@@ -67,7 +69,9 @@ def _scan_file(rel: str, text: str, deny: Denylist, exact_pins: bool) -> list[st
 def _run(scanner, text: str, deny: Denylist, exact_pins: bool) -> list[str]:
     try:
         return scanner(text, deny, exact_pins)
-    except ValueError as exc:  # TOML, requirement or version that will not parse
+    # A manifest that will not parse (bad TOML/INI/requirement/version, or a
+    # table of the wrong type) fails closed instead of crashing the suite.
+    except (ValueError, TypeError, AttributeError) as exc:
         return [
             f"cannot parse ({exc}), so cannot verify it excludes denylisted versions"
         ]
@@ -82,6 +86,7 @@ _SCANNERS = (
     (_f(r"(uv|poetry|pdm)\.lock"), lambda t, d, _: scan_lock(t, d)),
     (_f(r"pyproject\.toml"), scan_pyproject),
     (_f(r"setup\.py"), lambda t, d, _: scan_setup_py(t, d)),
+    (_f(r"setup\.cfg"), lambda t, d, _: scan_setup_cfg(t, d)),
     (
         # requirements-dev.txt, *.constraints.txt, requirements/base.txt, ci/constraints/x.txt
         _f(

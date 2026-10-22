@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="litellm-kamiwaza",
-    packages=find_packages(),
+    packages=find_packages(exclude=["tests", "tests.*"]),
     install_requires=[
         # litellm 1.82.7/1.82.8 (2026-03-24) and 1.107.0 (2026-10-21) were malicious;
         # raise the cap only after review.

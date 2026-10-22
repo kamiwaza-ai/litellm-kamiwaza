@@ -40,13 +40,9 @@ def _install_args(segment: str) -> list[str]:
 
 
 def _is_spec_token(token: str) -> bool:
-    markers = (
-        token.startswith("-"),
-        "/" in token,
-        "*" in token,
-        token.endswith(ARCHIVE),
-    )
-    return not any(markers)  # options, paths, globs and archives are not specs
+    # Options, paths and archives are not specs; `pkg==1.2.*` is, so keep `*`.
+    markers = (token.startswith("-"), "/" in token, token.endswith(ARCHIVE))
+    return not any(markers)
 
 
 def _install_specs(text: str) -> list[str]:
